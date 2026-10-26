@@ -242,7 +242,8 @@
   <div class="set-section">
     <div class="set-row"><div class="set-text"><div class="set-k">Updates</div><div class="set-v" id="setUpdateText"></div></div><button class="btn" id="setUpdateBtn" hidden></button></div>
     <label class="set-row" for="setAutoUpdate" id="setAutoUpdateRow"><div class="set-text"><div class="set-k">Install updates automatically</div><div class="set-v hint">Updates published to your hub are verified, then installed when you're not using the app.</div></div><input type="checkbox" id="setAutoUpdate" class="switch"></label>
-    <label class="set-row" for="setStartup"><div class="set-text"><div class="set-k">Start when I sign in</div><div class="set-v hint">Keeps monitoring in the background, in the tray.</div></div><input type="checkbox" id="setStartup" class="switch"></label>
+    <label class="set-row" for="setStartup"><div class="set-text"><div class="set-k">Start when I sign in</div><div class="set-v hint">Opens Device Monitor when you sign in, so this computer is always reporting.</div></div><input type="checkbox" id="setStartup" class="switch"></label>
+    <label class="set-row" for="setStartMin" id="setStartMinRow" hidden><div class="set-text"><div class="set-k">Start minimized to the tray</div><div class="set-v hint">Monitor in the background without opening the window at sign-in.</div></div><input type="checkbox" id="setStartMin" class="switch"></label>
     <div class="set-row"><div class="set-text"><div class="set-k">Temperature unit</div></div><div class="seg" id="setUnit"><button data-u="C">°C</button><button data-u="F">°F</button></div></div>
   </div>
   <div class="dlg-foot"><span class="hint" id="setVersion"></span><span class="spacer"></span><button class="btn" id="setQuit">Quit app</button><button class="btn primary" id="setDone" autofocus>Done</button></div>
@@ -997,6 +998,9 @@ async function openSettings() {
   $('#setFw').textContent = 'Allow…'; $('#setFw').disabled = false;
   $('#setStartup').checked = !!s.startup;
   $('#setStartup').disabled = !s.canSetStartup;
+  $('#setStartMinRow').hidden = !s.canStartMinimized;   // older apps don't report it
+  $('#setStartMin').checked = !!s.startMinimized;
+  $('#setStartMin').disabled = !s.startup;
   $('#setVersion').textContent = 'Version ' + s.version;
   settingsMode = s.mode;
   renderUpdateRow(s);
@@ -1015,7 +1019,11 @@ $('#setFw').addEventListener('click', async () => {
   const ok = await appApi.allowFirewall();
   b.textContent = ok ? 'Allowed ✓' : 'Not changed'; b.disabled = false;
 });
-$('#setStartup').addEventListener('change', async e => { e.target.checked = await appApi.setStartup(e.target.checked); });
+$('#setStartup').addEventListener('change', async e => {
+  e.target.checked = await appApi.setStartup(e.target.checked);
+  $('#setStartMin').disabled = !e.target.checked;
+});
+$('#setStartMin').addEventListener('change', async e => { e.target.checked = await appApi.setStartMinimized(e.target.checked); });
 $('#setUnit').addEventListener('click', e => {
   const b = e.target.closest('button'); if (b) $(`#unit button[data-u="${b.dataset.u}"]`).click();
 });

@@ -6,20 +6,21 @@ A desktop app (Windows and macOS) in the style of NZXT CAM that shows CPU, GPU, 
 
 ## Install
 
-Run **`dist\Device Monitor Setup 1.1.0.exe`** on Windows, or **`Device Monitor.dmg`** on a Mac (see [Mac](#mac)). It installs for your user only (no admin), adds Start menu and desktop shortcuts, and opens the app.
+Run **`dist\Device Monitor Setup <version>.exe`** on Windows (or download it from your hub at `http://<hub>:7777/download`), or **`Device Monitor.dmg`** on a Mac (see [Mac](#mac)). It installs for your user only (no admin), adds Start menu and desktop shortcuts, and opens the app.
 
 On first launch, pick a role:
 
 - **Host the dashboard here** on your main PC. It runs the hub, monitors itself, and serves the dashboard to other devices. Windows asks once for admin approval so other devices can connect.
 - **Connect to a hub** on every other PC. Hubs on your network are found automatically, or you can type the address. That PC is then registered and can view the dashboard too.
 
-The app lives in the system tray. Closing the window keeps it monitoring, and it starts with Windows. The **⚙ Settings** button (top-right of the app window) lets you:
+The app starts when you sign in and opens its window (Windows can take up to a minute after sign-in to start it). Closing the window keeps it monitoring in the system tray. The **⚙ Settings** button (top-right of the app window) lets you:
 
 - see whether this computer hosts or which hub it's connected to
 - copy the dashboard link
 - change setup (switch between Host and Connect)
 - allow network access
-- turn on start-at-sign-in and automatic updates
+- turn start-at-sign-in on or off, or start minimized to the tray instead of opening the window
+- turn automatic updates on or off
 - quit
 
 The tray menu has the same options.

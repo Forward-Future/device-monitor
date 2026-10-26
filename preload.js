@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('deviceMonitorApp', {
   changeSetup: () => ipcRenderer.invoke('dm:change-setup'),
   getSettings: () => ipcRenderer.invoke('dm:settings'),
   setStartup: enabled => ipcRenderer.invoke('dm:set-startup', !!enabled),
+  setStartMinimized: on => ipcRenderer.invoke('dm:set-start-minimized', !!on),
   allowFirewall: () => ipcRenderer.invoke('dm:allow-firewall'),
   copyLink: () => ipcRenderer.invoke('dm:copy-link'),
   quit: () => ipcRenderer.invoke('dm:quit'),

@@ -31,7 +31,8 @@ let settings = {};
 let settingsFile;
 
 function loadSettings() {
-  try { settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8')); } catch { settings = {}; }
+  // Tolerate a BOM (e.g. if the file was edited by hand) rather than losing the setup.
+  try { settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8').trim()); } catch { settings = {}; }
 }
 function saveSettings() {
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
@@ -99,11 +100,18 @@ function allowFirewall() {
   });
 }
 
+// Sign-in launches pass --startup (the window opens unless "start minimized" is on);
+// --hidden is reserved for relaunching in the background after an update.
+const LOGIN_ARGS = ['--startup'];
 function setStartup(enabled) {
   if (!app.isPackaged) return; // dev runs would register electron.exe
-  app.setLoginItemSettings({ openAtLogin: enabled, args: ['--hidden'] });
+  app.setLoginItemSettings({ openAtLogin: enabled, args: LOGIN_ARGS });
 }
-const startupEnabled = () => app.isPackaged && app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin;
+function startupEnabled() {
+  if (!app.isPackaged) return false;
+  const s = app.getLoginItemSettings({ args: LOGIN_ARGS });
+  return s.openAtLogin && s.executableWillLaunchAtLogin !== false; // false if disabled in Task Manager
+}
 
 // ---------------------------------------------------------------------------
 function createWindow({ show }) {
@@ -181,7 +189,7 @@ function buildTrayMenu() {
   }
   if (updater?.status.state === 'ready') items.push({ label: `Restart to update to ${updater.status.version}`, click: () => updater.maybeInstall(true) }, { type: 'separator' });
   else if (updater?.status.state === 'available') items.push({ label: `Download update ${updater.status.version}…`, click: () => openExternalSafe(updater.status.downloadUrl) }, { type: 'separator' });
-  items.push({ label: 'Start with Windows', type: 'checkbox', checked: startupEnabled(), enabled: app.isPackaged, click: m => setStartup(m.checked) });
+  items.push({ label: IS_MAC ? 'Open at login' : 'Start with Windows', type: 'checkbox', checked: startupEnabled(), enabled: app.isPackaged, click: m => setStartup(m.checked) });
   items.push({ label: 'Quit', click: () => { quitting = true; app.quit(); } });
   tray.setContextMenu(Menu.buildFromTemplate(items));
   tray.setToolTip(settings.mode === 'host' ? 'Device Monitor — hosting' : settings.mode === 'client' ? 'Device Monitor — connected' : 'Device Monitor');
@@ -251,6 +259,7 @@ handle('dm:settings', () => ({
   mode: settings.mode, hubUrl: settings.hubUrl, shareUrl: settings.mode ? shareUrl() : null,
   version: app.getVersion(), platform: process.platform,
   startup: startupEnabled(), canSetStartup: app.isPackaged,
+  startMinimized: settings.startMinimized === true, canStartMinimized: app.isPackaged && IS_WIN,
   canAllowFirewall: process.platform === 'win32' && settings.mode === 'host',
   update: updater ? updater.status : { state: 'unavailable' },
   autoUpdate: settings.autoUpdate !== false,
@@ -267,6 +276,7 @@ handle('dm:install-update', async () => {
   return updater.status;
 });
 handle('dm:set-startup', (_e, enabled) => { setStartup(!!enabled); buildTrayMenu(); return startupEnabled(); });
+handle('dm:set-start-minimized', (_e, on) => { settings.startMinimized = !!on; saveSettings(); return settings.startMinimized; });
 handle('dm:allow-firewall', () => allowFirewall());
 handle('dm:copy-link', () => { const u = shareUrl(); if (u) clipboard.writeText(u); return u; });
 handle('dm:quit', () => { quitting = true; app.quit(); });
@@ -283,6 +293,8 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     settingsFile = path.join(app.getPath('userData'), 'settings.json');
     loadSettings();
+    // Up to 1.2.3 the sign-in entry launched with --hidden; re-register it with the current args.
+    if (app.isPackaged && IS_WIN && app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin) setStartup(true);
     // The dashboard needs no browser permissions (camera, location, notifications…).
     session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
     session.defaultSession.setPermissionCheckHandler(() => false);
@@ -311,9 +323,9 @@ if (!app.requestSingleInstanceLock()) {
       },
     });
     updater.start();
-    const atLogin = process.argv.includes('--hidden') || (IS_MAC && app.getLoginItemSettings().wasOpenedAtLogin);
-    const hidden = atLogin && settings.mode;
-    createWindow({ show: !hidden });
+    const atLogin = process.argv.includes('--startup') || (IS_MAC && app.getLoginItemSettings().wasOpenedAtLogin);
+    const hidden = process.argv.includes('--hidden') || (atLogin && settings.startMinimized === true);
+    createWindow({ show: !(hidden && settings.mode) });
   });
   app.on('before-quit', () => { quitting = true; updater?.stop(); stopServices(); });
   app.on('dm-quit-for-update', () => { quitting = true; app.quit(); });
