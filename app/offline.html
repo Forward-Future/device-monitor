@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'self'">
+<title>Device Monitor — Hub offline</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; height: 100vh; background: #0d0d0d; color: #f0efec; font: 14px/1.5 "Segoe UI Variable", "Segoe UI", system-ui, sans-serif; display: flex; flex-direction: column; }
+  .titlebar { height: 64px; flex: none; -webkit-app-region: drag; }
+  main { flex: 1; display: grid; place-items: center; text-align: center; padding: 24px; }
+  h1 { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
+  p { color: #c3c2b7; margin: 0 0 18px; }
+  .hint { color: #898781; font-size: 12px; margin-top: 14px; }
+  button { font: inherit; color: inherit; cursor: pointer; border-radius: 8px; padding: 8px 14px; border: 1px solid rgba(255,255,255,.1); background: #232321; margin: 0 4px; }
+  button.primary { background: #9085e9; color: #0b0b0b; border-color: transparent; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="titlebar"></div>
+<main><div>
+  <h1>Can't reach the hub</h1>
+  <p id="msg">The PC hosting the dashboard may be off or asleep.</p>
+  <button class="primary" id="retry">Try again</button>
+  <button id="change">Change setup</button>
+  <div class="hint">This PC keeps sending its stats and will appear once the hub is back. Retrying automatically…</div>
+</div></main>
+<script src="offline.js"></script>
+</body>
+</html>

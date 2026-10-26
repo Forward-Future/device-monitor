@@ -1,0 +1,6 @@
+* text=auto
+*.sh text eol=lf
+agent/* text eol=lf
+*.ps1 text eol=crlf
+*.png binary
+build/test/macos/bin/* text eol=lf

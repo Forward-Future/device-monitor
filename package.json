@@ -1,0 +1,84 @@
+{
+  "name": "device-monitor",
+  "productName": "Device Monitor",
+  "version": "1.2.3",
+  "description": "Monitor CPU, GPU, memory and temperatures across all your devices",
+  "main": "main.js",
+  "author": "Matt",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "hub": "node server.js",
+    "icon": "node build/make-icon.js",
+    "dist": "node build/make-icon.js && electron-builder --win nsis",
+    "dist:mac": "node build/make-icon.js && electron-builder --mac dmg zip --universal",
+    "release": "node build/release.js"
+  },
+  "build": {
+    "appId": "com.devicemonitor.app",
+    "productName": "Device Monitor",
+    "files": [
+      "main.js",
+      "preload.js",
+      "server.js",
+      "agent-runner.js",
+      "discovery.js",
+      "history.js",
+      "public/**",
+      "agent/**",
+      "app/**",
+      "build/icon.png",
+      "build/tray.png",
+      "build/trayTemplate.png",
+      "build/trayTemplate@2x.png",
+      "security.js",
+      "updater.js",
+      "build/update-key.pub.pem"
+    ],
+    "asarUnpack": [
+      "agent/**"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "shortcutName": "Device Monitor",
+      "runAfterFinish": true
+    },
+    "mac": {
+      "category": "public.app-category.utilities",
+      "icon": "build/icon.png",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "identity": "-",
+      "hardenedRuntime": false,
+      "artifactName": "Device Monitor-${version}-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "Device Monitor",
+      "artifactName": "Device Monitor.dmg"
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "enableCookieEncryption": true,
+      "resetAdHocDarwinSignature": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0"
+  }
+}

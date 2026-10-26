@@ -1,0 +1,1096 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0d0d0d">
+<title>Device Monitor</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --page: #0d0d0d;
+    --surface-1: #1a1a19;
+    --surface-2: #232321;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --axis: #383835;
+    --border: rgba(255,255,255,0.10);
+    --cpu: #3987e5;      /* categorical slot 1 */
+    --gpu: #d95926;      /* categorical slot 2 */
+    --mem: #199e70;      /* categorical slot 3 */
+    --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+    --accent: #9085e9;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text-primary);
+    font: 14px/1.4 "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 16px;
+    padding: 14px 24px; background: rgba(13,13,13,0.9); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px; }
+  .logo svg { color: var(--accent); }
+  .summary { color: var(--text-secondary); font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 1; }
+  /* Header controls never wrap or squash; they switch to compact labels as space runs out. */
+  header > :not(.summary):not(.spacer) { flex-shrink: 0; white-space: nowrap; }
+  header .btn { display: inline-flex; align-items: center; gap: 6px; height: 34px; }
+  header .seg button { height: 32px; }
+  .short { display: none; }
+  @media (max-width: 1000px) { .summary { display: none; } }
+  @media (max-width: 860px) { header .full { display: none; } header .short { display: inline; } header { gap: 10px; } }
+  @media (max-width: 660px) { .logo-text { display: none; } }
+  @media (max-width: 400px) { header { gap: 8px; padding-left: 10px; padding-right: 10px; } header .seg button { padding: 6px 7px; } header .btn { padding: 7px 9px; } }
+  /* In the app window the caption buttons take ~150px on the right, so compact a bit sooner. */
+  @media (max-width: 1150px) { .app-window .summary { display: none; } }
+  @media (max-width: 1010px) { .app-window header .full { display: none; } .app-window header .short { display: inline; } .app-window header { gap: 10px; } }
+  @media (max-width: 810px) { .app-window .logo-text { display: none; } }
+  .spacer { flex: 1; }
+  .btn { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; }
+  .btn:hover { background: #2c2c2a; }
+  .btn.primary { background: var(--accent); border-color: transparent; color: #0b0b0b; font-weight: 600; }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button { background: none; border: 0; padding: 6px 10px; color: var(--text-muted); }
+  .seg button.on { background: var(--surface-2); color: var(--text-primary); }
+  main { padding: 24px; display: grid; gap: 20px; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); }
+  /* 65px = 64px caption-button overlay + 1px border below it, so the line runs the full width */
+  .app-window header { -webkit-app-region: drag; height: 65px; padding-top: 0; padding-bottom: 0; padding-right: 154px; background: #0d0d0d; backdrop-filter: none; }
+  .app-window header button, .app-window header .seg { -webkit-app-region: no-drag; }
+  /* macOS: traffic-light buttons sit on the left instead of caption buttons on the right */
+  .app-window.platform-darwin header { padding-left: 92px; padding-right: 24px; }
+  @media (max-width: 520px) { main { padding: 12px; grid-template-columns: 1fr; } header { padding: 12px; gap: 10px; } .summary { display: none; } }
+
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 16px; }
+  .card.offline { opacity: 0.55; }
+  .card-head { display: flex; align-items: flex-start; gap: 10px; }
+  .grip { background: none; border: 0; color: var(--text-muted); padding: 2px 0; margin: 2px -4px 0 -8px; cursor: grab; touch-action: none; line-height: 0; border-radius: 4px; opacity: .5; }
+  .card:hover .grip, .grip:focus-visible { opacity: 1; }
+  .grip:hover { color: var(--text-primary); }
+  .card { transition: box-shadow .2s, outline-color .2s; outline: 2px solid transparent; outline-offset: -1px; }
+  .card.dragging { outline-color: var(--accent); box-shadow: 0 24px 60px rgba(0,0,0,.65); position: relative; z-index: 4; will-change: transform; }
+  .card.settling { position: relative; z-index: 3; }
+  body.reordering, body.reordering * { cursor: grabbing !important; user-select: none; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; margin-top: 6px; flex: none; background: var(--good); box-shadow: 0 0 0 3px rgba(12,163,12,0.18); }
+  .offline .dot { background: var(--text-muted); box-shadow: none; }
+  .titles { flex: 1; min-width: 0; }
+  .name { font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub { color: var(--text-muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .icon-btn { background: none; border: 0; color: var(--text-muted); padding: 4px; border-radius: 6px; line-height: 0; }
+  .icon-btn:hover { color: var(--text-primary); background: var(--surface-2); }
+
+  .gauges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .gauge { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .gauge svg { width: 100%; max-width: 110px; }
+  .gauge .track { stroke: var(--grid); }
+  .gauge .val { font-size: 22px; font-weight: 600; fill: var(--text-primary); }
+  .gauge .lbl { font-size: 10px; letter-spacing: .08em; fill: var(--text-muted); text-transform: uppercase; }
+  .gauge-sub { font-size: 12px; color: var(--text-secondary); min-height: 22px; display: flex; align-items: center; }
+  .pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 99px; background: var(--surface-2); font-size: 12px; color: var(--text-primary); }
+  .pill i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+  .pill small { color: var(--text-muted); font-size: 11px; }
+
+  .chart { position: relative; }
+  .chart canvas { width: 100%; height: 110px; display: block; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 6px; background: var(--c); border-radius: 2px; }
+  .legend .range { margin-left: auto; color: var(--text-muted); }
+  .legend .range::before { display: none; }
+  .tip { position: absolute; pointer-events: none; background: #0b0b0b; border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; font-size: 12px; white-space: nowrap; display: none; z-index: 2; }
+  .tip b { font-weight: 600; } .tip .row::before { content: ""; display: inline-block; width: 8px; height: 2px; margin-right: 6px; vertical-align: middle; background: var(--c); }
+  .tip .t { color: var(--text-muted); margin-bottom: 2px; }
+
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+  .stat { min-width: 0; }
+  .stat .k { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .stat .v { font-size: 13px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .bar { height: 6px; background: var(--grid); border-radius: 4px; overflow: hidden; margin-top: 5px; }
+  .bar > div { height: 100%; border-radius: 4px; background: var(--c, var(--text-secondary)); transition: width .4s; }
+
+  details { border-top: 1px solid var(--border); padding-top: 12px; }
+  summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; list-style: none; user-select: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "▸ "; } details[open] summary::before { content: "▾ "; }
+  .section { margin-top: 14px; }
+  .section h4 { margin: 0 0 8px; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; }
+  .cores { display: grid; grid-template-columns: repeat(auto-fill, minmax(34px, 1fr)); gap: 2px; }
+  .core { height: 28px; border-radius: 4px; font-size: 10px; display: grid; place-items: center; color: var(--text-primary); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; }
+  .kv span:nth-child(odd) { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kv span:nth-child(even) { text-align: right; font-variant-numeric: tabular-nums; }
+  .gpu-block + .gpu-block { margin-top: 10px; }
+
+  .empty { grid-column: 1 / -1; text-align: center; padding: 80px 20px; color: var(--text-secondary); }
+  .empty h2 { color: var(--text-primary); font-weight: 600; }
+
+  dialog { background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 14px; padding: 22px; width: min(640px, calc(100vw - 24px)); }
+  dialog::backdrop { background: rgba(0,0,0,0.6); }
+  dialog h3 { margin: 0 0 4px; }
+  dialog p { color: var(--text-secondary); margin: 6px 0 14px; }
+  .cmd { display: flex; gap: 8px; align-items: stretch; margin-bottom: 8px; }
+  .cmd code { flex: 1; background: #0b0b0b; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; font: 12px/1.5 Consolas, ui-monospace, monospace; word-break: break-all; user-select: all; }
+  .hint { font-size: 12px; color: var(--text-muted); }
+  select { background: var(--surface-2); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font: inherit; }
+  .tabs { display: flex; gap: 6px; margin: 14px 0 10px; }
+  .dlg-foot { display: flex; justify-content: flex-end; margin-top: 18px; }
+  .menu { position: absolute; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 4px; z-index: 10; min-width: 150px; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
+  .menu button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 7px 10px; border-radius: 6px; }
+  .menu button:hover { background: #2c2c2a; }
+  .menu .danger { color: #e66767; }
+  /* ---------- history page ---------- */
+  .chart canvas { cursor: pointer; }
+  body.history-mode #grid, body.history-mode #range { display: none; }
+  #historyView { padding: 20px 24px 40px; max-width: 1280px; margin: 0 auto; }
+  #historyView[hidden] { display: none; }
+  .hv-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
+  .hv-bar a.btn { text-decoration: none; color: var(--text-primary); }
+  .hv-devices { display: flex; gap: 6px; flex-wrap: wrap; }
+  .hv-devices button { background: var(--surface-1); border: 1px solid var(--border); border-radius: 99px; padding: 5px 12px 5px 10px; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 7px; }
+  .hv-devices button.on { color: var(--text-primary); border-color: var(--accent); }
+  .hv-devices i { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
+  .hv-devices i.on { background: var(--good); }
+  .hv-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .hv-head h2 { margin: 0; font-size: 20px; font-weight: 600; }
+  .hv-head .sub { color: var(--text-muted); font-size: 13px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .tile .k { color: var(--text-muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; display: flex; align-items: center; gap: 6px; }
+  .tile .k::before { content: ""; width: 10px; height: 2px; border-radius: 2px; background: var(--c); }
+  .tile .v { font-size: 22px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .tile .s { color: var(--text-secondary); font-size: 12px; }
+  .hv-chart { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px 10px; margin-bottom: 14px; position: relative; }
+  .hv-chart h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .hv-chart .legend { margin: 6px 0 4px; }
+  .hv-chart canvas { width: 100%; height: 170px; display: block; cursor: crosshair; touch-action: pan-y; }
+  .hv-chart .tip { top: 40px; }
+  .hv-empty { color: var(--text-secondary); padding: 40px 0; text-align: center; }
+  @media (max-width: 520px) { #historyView { padding: 12px; } }
+  /* ---------- app settings (desktop app only) ---------- */
+  #settingsBtn { display: none; background: none; border-color: transparent; color: var(--text-muted); padding: 7px; }
+  #settingsBtn:hover { color: var(--text-primary); background: var(--surface-2); }
+  .has-settings #settingsBtn { display: inline-flex; }
+  @media (max-width: 760px) { .has-settings #unit { display: none; } }   /* unit lives in Settings when space is tight */
+  #settingsDlg { width: min(520px, calc(100vw - 24px)); }
+  .set-section { border-top: 1px solid var(--border); padding: 6px 0; }
+  .set-section:first-of-type { margin-top: 14px; }
+  .set-row { display: flex; align-items: center; gap: 16px; padding: 10px 0; }
+  .set-row[hidden] { display: none; }
+  .set-text { flex: 1; min-width: 0; }
+  .set-k { font-weight: 600; font-size: 14px; }
+  .set-v { color: var(--text-secondary); font-size: 13px; overflow-wrap: anywhere; }
+  .set-v.mono { font-family: Consolas, ui-monospace, monospace; font-size: 12px; }
+  .switch { appearance: none; width: 38px; height: 22px; border-radius: 11px; background: var(--grid); position: relative; cursor: pointer; flex: none; transition: background .15s; margin: 0; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--text-secondary); transition: transform .15s, background .15s; }
+  .switch:checked { background: var(--accent); }
+  .switch:checked::after { transform: translateX(16px); background: #0b0b0b; }
+  .switch:disabled { opacity: .5; cursor: default; }
+  #settingsDlg .dlg-foot { align-items: center; gap: 8px; border-top: 1px solid var(--border); padding-top: 14px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4M7 12l3-3 2 2 4-4"/></svg>
+    <span class="logo-text">Device Monitor</span>
+  </div>
+  <div class="summary" id="summary"></div>
+  <div class="spacer"></div>
+  <div class="seg" id="range" title="Chart range"><button data-r="10m"><span class="full">10 min</span><span class="short">10m</span></button><button data-r="1h"><span class="full">60 min</span><span class="short">1h</span></button><button data-r="6h"><span class="full">6 hours</span><span class="short">6h</span></button></div>
+  <button class="btn" id="historyBtn" title="History"><svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg><span class="full">History</span></button>
+  <div class="seg" id="unit" title="Temperature unit"><button data-u="C">°C</button><button data-u="F">°F</button></div>
+  <button class="btn primary" id="addBtn" title="Add device"><span class="full">+ Add device</span><span class="short">+ Add</span></button>
+  <button class="btn" id="settingsBtn" title="Settings" aria-label="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+</header>
+<main id="grid"></main>
+<section id="historyView" hidden>
+  <div class="hv-bar">
+    <a class="btn" href="#/">← Dashboard</a>
+    <div class="hv-devices" id="hvDevices"></div>
+    <div class="spacer"></div>
+    <div class="seg" id="hvRange" title="Time range">
+      <button data-r="1h">1 h</button><button data-r="6h">6 h</button><button data-r="24h">24 h</button><button data-r="7d">7 days</button><button data-r="30d">30 days</button>
+    </div>
+  </div>
+  <div class="hv-head"><h2 id="hvTitle"></h2><span class="sub" id="hvSub"></span><span class="spacer"></span><button class="btn" id="hvReset" hidden>Reset zoom</button></div>
+  <div class="tiles" id="hvTiles"></div>
+  <div id="hvCharts"></div>
+  <p class="hint">Hover to inspect · drag across a chart to zoom in · double-click to reset. Shaded bands show the peak within each interval.</p>
+</section>
+
+
+<dialog id="addDlg">
+  <h3>Add a device</h3>
+  <p>Pick how to add the device. Either way it shows up here within seconds and keeps reporting after restarts.</p>
+  <label class="hint">Hub address the device should connect to:
+    <select id="hubSel"></select>
+  </label>
+  <div class="tabs seg" id="osTabs"><button data-os="win" class="on">Windows command</button><button data-os="app">Desktop app (Windows / Mac)</button><button data-os="linux">Mac / Linux command</button></div>
+  <div class="cmd" id="cmdRow"><code id="cmd"></code><button class="btn" id="copyBtn">Copy</button></div>
+  <div class="hint" id="cmdHint"></div>
+  <h3 style="margin-top:22px">View from another device</h3>
+  <p style="margin-bottom:8px">Open this address on any phone, tablet or computer on the same network:</p>
+  <div class="cmd"><code id="viewUrl"></code><button class="btn" id="copyView">Copy</button></div>
+  <div class="dlg-foot"><button class="btn" id="addDone">Done</button></div>
+</dialog>
+<dialog id="settingsDlg">
+  <h3>Settings</h3>
+  <div class="set-section">
+    <div class="set-row"><div class="set-text"><div class="set-k">This computer</div><div class="set-v" id="setRole"></div></div><button class="btn" id="setChange">Change setup…</button></div>
+    <div class="set-row" id="setLinkRow"><div class="set-text"><div class="set-k">Dashboard link</div><div class="set-v mono" id="setLink"></div></div><button class="btn" id="setCopy">Copy</button></div>
+    <div class="set-row" id="setFwRow"><div class="set-text"><div class="set-k">Network access</div><div class="set-v hint">Let phones and other computers on your network open this dashboard.</div></div><button class="btn" id="setFw">Allow…</button></div>
+  </div>
+  <div class="set-section">
+    <div class="set-row"><div class="set-text"><div class="set-k">Updates</div><div class="set-v" id="setUpdateText"></div></div><button class="btn" id="setUpdateBtn" hidden></button></div>
+    <label class="set-row" for="setAutoUpdate" id="setAutoUpdateRow"><div class="set-text"><div class="set-k">Install updates automatically</div><div class="set-v hint">Updates published to your hub are verified, then installed when you're not using the app.</div></div><input type="checkbox" id="setAutoUpdate" class="switch"></label>
+    <label class="set-row" for="setStartup"><div class="set-text"><div class="set-k">Start when I sign in</div><div class="set-v hint">Keeps monitoring in the background, in the tray.</div></div><input type="checkbox" id="setStartup" class="switch"></label>
+    <div class="set-row"><div class="set-text"><div class="set-k">Temperature unit</div></div><div class="seg" id="setUnit"><button data-u="C">°C</button><button data-u="F">°F</button></div></div>
+  </div>
+  <div class="dlg-foot"><span class="hint" id="setVersion"></span><span class="spacer"></span><button class="btn" id="setQuit">Quit app</button><button class="btn primary" id="setDone" autofocus>Done</button></div>
+</dialog>
+
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const devices = new Map();          // id -> device view
+const cards = new Map();            // id -> { el, refs }
+let unit = localStorage.getItem('unit') || 'C';
+let info = null;
+
+// ---------- formatting ----------
+const fmtPct = v => v == null ? '–' : Math.round(v) + '%';
+function fmtBytes(b, d = 1) {
+  if (b == null || isNaN(b)) return '–';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return b.toFixed(i < 2 ? 0 : d) + ' ' + u[i];
+}
+const fmtRate = b => b == null ? '–' : fmtBytes(b) + '/s';
+function fmtTemp(c) {
+  if (c == null) return '–';
+  return unit === 'F' ? Math.round(c * 9 / 5 + 32) + '°F' : Math.round(c) + '°C';
+}
+function fmtUptime(s) {
+  if (!s) return '';
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+function ago(ms) {
+  const s = Math.round((Date.now() - ms) / 1000);
+  if (s < 60) return s + 's ago'; if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago'; return Math.round(s / 86400) + 'd ago';
+}
+function tempStatus(c) {
+  if (c == null) return null;
+  if (c < 70) return ['var(--good)', 'Normal'];
+  if (c < 85) return ['var(--warning)', 'Warm'];
+  return ['var(--critical)', 'Hot'];
+}
+function tempPill(c, src) {
+  const st = tempStatus(c);
+  if (!st) return '<span class="hint">no temp sensor</span>';
+  return `<span class="pill"><i style="background:${st[0]}"></i>${fmtTemp(c)} <small>${st[1]}${src === 'acpi' ? ' · ACPI' : ''}</small></span>`;
+}
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// ---------- gauge ----------
+const R = 40, ARC = 0.75, CIRC = 2 * Math.PI * R;
+function gaugeSvg(label, color) {
+  const len = CIRC * ARC;
+  return `<svg viewBox="0 0 100 98" role="img" aria-label="${label}">
+    <g transform="rotate(135 50 50)">
+      <circle class="track" cx="50" cy="50" r="${R}" fill="none" stroke-width="7" stroke-linecap="round" stroke-dasharray="${len} ${CIRC}"/>
+      <circle class="fill" cx="50" cy="50" r="${R}" fill="none" stroke="${color}" stroke-width="7" stroke-linecap="round"
+        stroke-dasharray="0 ${CIRC}" style="transition: stroke-dasharray .5s"/>
+    </g>
+    <text class="val" x="50" y="54" text-anchor="middle">–</text>
+    <text class="lbl" x="50" y="95" text-anchor="middle">${label}</text>
+  </svg>`;
+}
+function setGauge(svg, pct) {
+  const len = CIRC * ARC;
+  const v = pct == null ? 0 : Math.max(0, Math.min(100, pct));
+  svg.querySelector('.fill').setAttribute('stroke-dasharray', `${Math.max(0.01, len * v / 100)} ${CIRC}`);
+  svg.querySelector('.val').textContent = fmtPct(pct);
+}
+
+// ---------- card ----------
+function createCard(id) {
+  const el = document.createElement('section');
+  el.className = 'card';
+  el.dataset.id = id;
+  el.innerHTML = `
+    <div class="card-head">
+      <button class="grip" title="Drag to reorder" aria-label="Drag to reorder">
+        <svg width="14" height="18" viewBox="0 0 14 18" fill="currentColor"><circle cx="4" cy="3" r="1.6"/><circle cx="10" cy="3" r="1.6"/><circle cx="4" cy="9" r="1.6"/><circle cx="10" cy="9" r="1.6"/><circle cx="4" cy="15" r="1.6"/><circle cx="10" cy="15" r="1.6"/></svg>
+      </button>
+      <div class="dot"></div>
+      <div class="titles"><div class="name"></div><div class="sub"></div></div>
+      <button class="icon-btn menu-btn" title="Options" aria-label="Device options">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+      </button>
+    </div>
+    <div class="gauges">
+      <div class="gauge g-cpu">${gaugeSvg('CPU', 'var(--cpu)')}<div class="gauge-sub"></div></div>
+      <div class="gauge g-gpu">${gaugeSvg('GPU', 'var(--gpu)')}<div class="gauge-sub"></div></div>
+      <div class="gauge g-mem">${gaugeSvg('Memory', 'var(--mem)')}<div class="gauge-sub"></div></div>
+    </div>
+    <div class="chart">
+      <div class="legend"><span style="--c:var(--cpu)">CPU</span><span style="--c:var(--gpu)">GPU</span><span style="--c:var(--mem)">Memory</span><span class="range">${RANGE_LABEL[range]}</span></div>
+      <canvas></canvas>
+      <div class="tip"></div>
+    </div>
+    <div class="stats"></div>
+    <details><summary>Details</summary><div class="detail-body"></div></details>`;
+  const refs = {
+    name: $('.name', el), sub: $('.sub', el), stats: $('.stats', el), detail: $('.detail-body', el),
+    details: $('details', el), canvas: $('canvas', el), tip: $('.tip', el),
+    cpu: $('.g-cpu svg', el), gpu: $('.g-gpu svg', el), mem: $('.g-mem svg', el),
+    cpuSub: $('.g-cpu .gauge-sub', el), gpuSub: $('.g-gpu .gauge-sub', el), memSub: $('.g-mem .gauge-sub', el),
+    hover: null,
+  };
+  $('.menu-btn', el).addEventListener('click', e => openMenu(e, id));
+  $('.grip', el).addEventListener('pointerdown', e => startDrag(e, id));
+  refs.details.addEventListener('toggle', () => updateCard(id));
+  const canvas = refs.canvas;
+  canvas.addEventListener('mousemove', e => { const r = canvas.getBoundingClientRect(); refs.hover = (e.clientX - r.left) / r.width; drawChart(id); });
+  canvas.addEventListener('mouseleave', () => { refs.hover = null; drawChart(id); });
+  canvas.addEventListener('click', () => { location.hash = '#/history/' + encodeURIComponent(id); });
+  canvas.title = 'Open history';
+  cards.set(id, { el, refs });
+  return cards.get(id);
+}
+
+function updateCard(id) {
+  const d = devices.get(id); if (!d) return;
+  const c = cards.get(id) || createCard(id);
+  const { el, refs } = c;
+  const L = d.latest || {};
+  el.classList.toggle('offline', !d.online);
+  refs.name.textContent = d.name || d.hostname || id;
+  refs.name.title = d.hostname || '';
+  const status = d.online ? (L.uptime ? 'up ' + fmtUptime(L.uptime) : 'online') : 'offline · last seen ' + (d.lastSeen ? ago(d.lastSeen) : 'never');
+  refs.sub.textContent = [d.os || d.platform, status, versionLabel(d)].filter(Boolean).join(' · ');
+
+  const cpu = L.cpu || {}, mem = L.memory || {}, gpus = L.gpus || [], g = gpus[0] || {};
+  setGauge(refs.cpu, cpu.usage);
+  setGauge(refs.gpu, gpus.length ? g.usage : null);
+  setGauge(refs.mem, mem.total ? mem.used / mem.total * 100 : null);
+  refs.cpuSub.innerHTML = tempPill(cpu.temp, cpu.tempSource);
+  refs.gpuSub.innerHTML = gpus.length ? tempPill(g.temp) : '<span class="hint">no GPU</span>';
+  refs.memSub.textContent = mem.total ? `${fmtBytes(mem.used)} / ${fmtBytes(mem.total, 0)}` : '';
+
+  const stats = [];
+  stats.push(stat('CPU', esc(shortCpu(cpu.name)) + (cpu.clockMHz ? ` · ${(cpu.clockMHz / 1000).toFixed(2)} GHz` : '')));
+  if (gpus.length) stats.push(stat('GPU', esc(shortGpu(g.name)) + (g.power != null ? ` · ${Math.round(g.power)} W` : '')));
+  if (g.memTotal) stats.push(stat('VRAM', `${fmtBytes(g.memUsed)} / ${fmtBytes(g.memTotal, 0)}`, g.memUsed / g.memTotal * 100, 'var(--gpu)'));
+  const disks = L.disks || [];
+  const sys = disks.find(x => x.name === 'C:' || x.name === '/') || disks[0];
+  if (sys) stats.push(stat('Disk ' + esc(sys.name), `${fmtBytes(sys.used, 0)} / ${fmtBytes(sys.total, 0)}`, sys.used / sys.total * 100));
+  if (L.net) stats.push(stat('Network', `↓ ${fmtRate(L.net.rx)} &nbsp;↑ ${fmtRate(L.net.tx)}`));
+  if (L.diskIO) stats.push(stat('Disk I/O', `R ${fmtRate(L.diskIO.read)} &nbsp;W ${fmtRate(L.diskIO.write)}`));
+  refs.stats.innerHTML = stats.join('');
+
+  if (refs.details.open) refs.detail.innerHTML = detailHtml(L);
+  drawChart(id);
+}
+
+const shortCpu = n => (n || '').replace(/\(R\)|\(TM\)|CPU|Processor|@.*$/gi, '').replace(/\s+/g, ' ').trim() || '–';
+const shortGpu = n => (n || '').replace(/^NVIDIA\s+/i, '').replace(/Workstation Edition/i, '').trim() || '–';
+function stat(k, v, pct, color) {
+  return `<div class="stat"><div class="k">${k}</div><div class="v" title="${v.replace(/<[^>]+>/g, '')}">${v}</div>${pct != null ? `<div class="bar"><div style="width:${pct.toFixed(1)}%;--c:${color || 'var(--text-secondary)'}"></div></div>` : ''}</div>`;
+}
+
+function coreColor(u) {
+  // Sequential blue ramp (single hue, light = low on dark surface means recede -> use dark-to-bright)
+  const ramp = ['#104281', '#184f95', '#1c5cab', '#256abf', '#2a78d6', '#3987e5', '#5598e7', '#6da7ec', '#86b6ef'];
+  return ramp[Math.min(ramp.length - 1, Math.floor((u || 0) / 100 * ramp.length))];
+}
+function detailHtml(L) {
+  let h = '';
+  const cores = L.cpu?.cores || [];
+  if (cores.length) {
+    h += `<div class="section"><h4>CPU threads (${cores.length})</h4><div class="cores">` +
+      cores.map((u, i) => `<div class="core" style="background:${coreColor(u)}" title="Thread ${i}: ${fmtPct(u)}">${Math.round(u)}</div>`).join('') + '</div></div>';
+  }
+  for (const [i, g] of (L.gpus || []).entries()) {
+    const rows = [['Model', esc(g.name)], ['Load', fmtPct(g.usage)], ['Temperature', fmtTemp(g.temp)]];
+    if (g.memTotal) rows.push(['VRAM', `${fmtBytes(g.memUsed)} / ${fmtBytes(g.memTotal, 0)}`]);
+    if (g.power != null) rows.push(['Power', `${Math.round(g.power)} W${g.powerLimit ? ' / ' + Math.round(g.powerLimit) + ' W' : ''}`]);
+    if (g.clockMHz != null) rows.push(['Core clock', `${Math.round(g.clockMHz)} MHz`]);
+    if (g.fan != null) rows.push(['Fan', fmtPct(g.fan)]);
+    h += `<div class="section gpu-block"><h4>GPU ${(L.gpus.length > 1) ? i : ''}</h4><div class="kv">${rows.map(r => `<span>${r[0]}</span><span>${r[1]}</span>`).join('')}</div></div>`;
+  }
+  if (L.disks?.length) {
+    h += `<div class="section"><h4>Drives</h4>` + L.disks.map(d => stat(esc(d.name + (d.label ? ' · ' + d.label : '')), `${fmtBytes(d.used, 0)} / ${fmtBytes(d.total, 0)} · ${fmtPct(d.used / d.total * 100)}`, d.used / d.total * 100)).join('<div style="height:8px"></div>') + '</div>';
+  }
+  if (L.temps?.length) {
+    h += `<div class="section"><h4>Temperature sensors</h4><div class="kv">${L.temps.map(t => `<span title="${esc(t.parent)}">${esc(t.name)}</span><span>${fmtTemp(t.value)}</span>`).join('')}</div></div>`;
+  }
+  if (L.fans?.length) {
+    h += `<div class="section"><h4>Fans</h4><div class="kv">${L.fans.map(f => `<span>${esc(f.name)}</span><span>${f.rpm == null ? '–' : Math.round(f.rpm)} RPM</span>`).join('')}</div></div>`;
+  }
+  if (!L.temps?.length && L.platform === 'windows' && L.cpu?.temp == null) {
+    h += `<div class="section hint">CPU temperature, fans and motherboard sensors appear here if <b>LibreHardwareMonitor</b> is running on this PC.</div>`;
+  }
+  return h || '<div class="section hint">No data yet.</div>';
+}
+
+// ---------- chart (one axis, 0–100%) ----------
+const SERIES = [['cpu', 'CPU', '--cpu'], ['gpu', 'GPU', '--gpu'], ['mem', 'Memory', '--mem']];
+function drawChart(id) {
+  const d = devices.get(id), c = cards.get(id); if (!d || !c) return;
+  const { canvas, tip, hover } = c.refs;
+  const css = getComputedStyle(document.documentElement);
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  if (!W) return;
+  if (canvas.width !== W * dpr || canvas.height !== H * dpr) { canvas.width = W * dpr; canvas.height = H * dpr; }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const padL = 30, padR = 4, padT = 6, padB = 6;
+  const cw = W - padL - padR, ch = H - padT - padB;
+  const ser = series.get(id) || { points: [], resolution: 2000 };
+  const hist = ser.points;
+  const span = RANGE_MS[range], tEnd = Date.now(), tStart = tEnd - span;
+  const gap = Math.max(10000, ser.resolution * 3);
+  const x = t => padL + (t - tStart) / span * cw;
+  const y = v => padT + ch - (v / 100) * ch;
+
+  ctx.font = '10px Segoe UI, system-ui, sans-serif'; ctx.fillStyle = css.getPropertyValue('--text-muted'); ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+  for (const v of [0, 50, 100]) {
+    ctx.strokeStyle = css.getPropertyValue(v === 0 ? '--axis' : '--grid'); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(padL, Math.round(y(v)) + 0.5); ctx.lineTo(W - padR, Math.round(y(v)) + 0.5); ctx.stroke();
+    ctx.fillText(v + '%', padL - 6, y(v));
+  }
+  const hasGpu = hist.some(s => s.gpu != null);
+  for (const [key, , varName] of SERIES) {
+    if (key === 'gpu' && !hasGpu) continue;
+    ctx.strokeStyle = css.getPropertyValue(varName).trim(); ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.beginPath(); let pen = false, prevT = 0;
+    for (const s of hist) {
+      if (s.t < tStart || s[key] == null) { pen = false; continue; }
+      if (pen && s.t - prevT > gap) pen = false;  // gap when device was offline
+      pen ? ctx.lineTo(x(s.t), y(s[key])) : ctx.moveTo(x(s.t), y(s[key]));
+      pen = true; prevT = s.t;
+    }
+    ctx.stroke();
+  }
+  // Hover: crosshair + tooltip with nearest sample.
+  tip.style.display = 'none';
+  if (hover != null && hist.length) {
+    const tH = tStart + ((hover * W - padL) / cw) * span;
+    let best = null; for (const s of hist) if (!best || Math.abs(s.t - tH) < Math.abs(best.t - tH)) best = s;
+    if (best && best.t >= tStart) {
+      const px = x(best.t);
+      ctx.strokeStyle = css.getPropertyValue('--text-muted'); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(Math.round(px) + 0.5, padT); ctx.lineTo(Math.round(px) + 0.5, padT + ch); ctx.stroke();
+      for (const [key, , varName] of SERIES) {
+        if (best[key] == null) continue;
+        ctx.fillStyle = css.getPropertyValue(varName); ctx.strokeStyle = css.getPropertyValue('--surface-1'); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(px, y(best[key]), 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      }
+      const secs = Math.round((tEnd - best.t) / 1000);
+      tip.innerHTML = `<div class="t">${range !== '10m' ? clock(best.t) : secs < 5 ? 'now' : secs < 60 ? secs + 's ago' : Math.floor(secs / 60) + 'm ' + (secs % 60) + 's ago'}</div>` +
+        SERIES.filter(([k]) => best[k] != null).map(([k, label, v]) => `<div class="row" style="--c:var(${v})">${label} <b>${fmtPct(best[k])}</b>${k === 'cpu' && best.cpuTemp != null ? ' · ' + fmtTemp(best.cpuTemp) : ''}${k === 'gpu' && best.gpuTemp != null ? ' · ' + fmtTemp(best.gpuTemp) : ''}</div>`).join('');
+      tip.style.display = 'block';
+      const tw = tip.offsetWidth;
+      tip.style.left = Math.min(W - tw, Math.max(0, px + 12 > W - tw ? px - tw - 12 : px + 12)) + 'px';
+      tip.style.top = '24px';
+    }
+  }
+}
+
+// ---------- grid / layout ----------
+// ---------- drag to reorder (pointer events: mouse, pen and touch) ----------
+// The dragged card follows the pointer; the others glide out of the way (FLIP animation).
+// Hit-testing uses layout offsets (unaffected by transforms) so moving cards never cause flicker.
+let drag = null;
+const EASE = 'cubic-bezier(.2, .8, .2, 1)';
+const pageBox = el => ({ x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight });
+
+function startDrag(e, id) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const el = cards.get(id).el;
+  const box = pageBox(el);
+  el.getAnimations().forEach(a => a.cancel());
+  drag = { id, el, pointerId: e.pointerId, cx: e.clientX, cy: e.clientY, grabX: e.pageX - box.x, grabY: e.pageY - box.y, lastOver: null };
+  el.classList.add('dragging'); document.body.classList.add('reordering');
+  follow();
+
+  const move = ev => { if (ev.pointerId !== drag.pointerId) return; drag.cx = ev.clientX; drag.cy = ev.clientY; follow(); maybeReorder(); };
+  const scroller = setInterval(() => {   // auto-scroll near the top/bottom edge
+    const edge = 70; let dy = 0;
+    if (drag.cy < edge + 65) dy = -14; else if (drag.cy > innerHeight - edge) dy = 14;
+    if (dy) { window.scrollBy(0, dy); follow(); maybeReorder(); }
+  }, 16);
+  const end = ev => {
+    if (ev.pointerId !== drag.pointerId) return;
+    clearInterval(scroller);
+    window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', end); window.removeEventListener('pointercancel', end);
+    // Settle the card into its slot.
+    const from = el.style.transform;
+    el.style.transform = '';
+    el.classList.remove('dragging'); el.classList.add('settling');
+    el.animate([{ transform: from }, { transform: 'none' }], { duration: 220, easing: EASE })
+      .finished.catch(() => {}).then(() => el.classList.remove('settling'));
+    document.body.classList.remove('reordering');
+    const ids = [...$('#grid').children].map(c => c.dataset.id).filter(Boolean);
+    const changed = ids.some((id, i) => devices.get(id)?.order !== i);
+    ids.forEach((id, i) => { const d = devices.get(id); if (d) d.order = i; });
+    drag = null;
+    if (changed) fetch('/api/order', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
+  };
+  window.addEventListener('pointermove', move); window.addEventListener('pointerup', end); window.addEventListener('pointercancel', end);
+}
+
+// Position the dragged card under the pointer, relative to its current layout slot.
+function follow() {
+  const { el } = drag, box = pageBox(el);
+  const px = drag.cx + scrollX, py = drag.cy + scrollY;
+  el.style.transform = `translate(${px - drag.grabX - box.x}px, ${py - drag.grabY - box.y}px) scale(1.02)`;
+}
+
+function maybeReorder() {
+  const { el } = drag;
+  const px = drag.cx + scrollX, py = drag.cy + scrollY;
+  const kids = [...$('#grid').children].filter(c => c.classList.contains('card'));
+  const over = kids.find(c => { if (c === el) return false; const b = pageBox(c); return px >= b.x && px <= b.x + b.w && py >= b.y && py <= b.y + b.h; });
+  if (!over) { drag.lastOver = null; return; }
+  if (over === drag.lastOver) return;   // wait until the pointer leaves it before swapping back
+  drag.lastOver = over;
+
+  // FLIP: First (visual positions incl. running animations), then reorder, then animate from the old spot.
+  const first = new Map(kids.filter(c => c !== el).map(c => [c, c.getBoundingClientRect()]));
+  const from = kids.indexOf(el), to = kids.indexOf(over);
+  $('#grid').insertBefore(el, from < to ? over.nextSibling : over);
+  for (const [c, r] of first) {
+    const b = pageBox(c);
+    const dx = r.left + scrollX - b.x, dy = r.top + scrollY - b.y;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
+    c.getAnimations().forEach(a => a.cancel());
+    c.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 260, easing: EASE });
+  }
+  follow();
+}
+
+function renderGrid() {
+  const grid = $('#grid');
+  const list = [...devices.values()].sort((a, b) => ((a.order ?? 1e9) - (b.order ?? 1e9)) || (a.name || '').localeCompare(b.name || ''));
+  for (const [id, c] of cards) if (!devices.has(id)) { c.el.remove(); cards.delete(id); }
+  if (!list.length) {
+    grid.innerHTML = `<div class="empty"><h2>No devices yet</h2><p>Click <b>+ Add device</b> and run the command on each PC you want to monitor.</p></div>`;
+  } else {
+    $('.empty', grid)?.remove();
+    list.forEach((d, i) => { const c = cards.get(d.id) || createCard(d.id); if (!drag && grid.children[i] !== c.el) grid.insertBefore(c.el, grid.children[i] || null); updateCard(d.id); });
+  }
+  const on = list.filter(d => d.online).length;
+  $('#summary').textContent = list.length ? `${on} of ${list.length} device${list.length === 1 ? '' : 's'} online` : '';
+}
+
+// ---------- live data ----------
+function connect() {
+  const es = new EventSource('/api/stream');
+  es.onmessage = ev => {
+    const m = JSON.parse(ev.data);
+    if (m.type === 'snapshot') {
+      devices.clear(); series.clear();
+      for (const d of m.devices) { devices.set(d.id, d); if (range === '10m') series.set(d.id, { points: d.history || [], resolution: 2000 }); }
+      renderGrid(); if (range !== '10m') loadAllSeries();
+      if (!$('#historyView').hidden) renderHvDevices();
+    }
+    else if (m.type === 'report') {
+      const prev = devices.get(m.id);
+      appendSample(m.id, m.sample);
+      const wasOnline = prev?.online;
+      devices.set(m.id, m.device);
+      if (!prev || !wasOnline) renderGrid(); else updateCard(m.id);
+    }
+    else if (m.type === 'device') { devices.set(m.device.id, m.device); renderGrid(); if (!$('#historyView').hidden) renderHvDevices(); }
+    else if (m.type === 'removed') { devices.delete(m.id); series.delete(m.id); renderGrid(); if (hv.id === m.id && !$('#historyView').hidden) location.hash = '#/'; }
+    else if (m.type === 'update') {
+      latestVersions[m.platform] = m.version; renderGrid();
+      if (appApi?.checkForUpdates) appApi.checkForUpdates();
+    }
+    else if (m.type === 'order') { for (const [id, o] of Object.entries(m.order)) { const d = devices.get(id); if (d) d.order = o; } renderGrid(); }
+    else if (m.type === 'status') {
+      let changed = false;
+      for (const [id, on] of Object.entries(m.online)) { const d = devices.get(id); if (d && d.online !== on) { d.online = on; changed = true; } }
+      if (changed) { renderGrid(); if (!$('#historyView').hidden) renderHvDevices(); }
+      for (const id of devices.keys()) drawChart(id);  // keep the time axis sliding
+    }
+  };
+  es.onerror = () => { $('#summary').textContent = 'Reconnecting to hub…'; };
+}
+
+// ---------- menu ----------
+function openMenu(e, id) {
+  e.stopPropagation();
+  document.querySelector('.menu')?.remove();
+  const m = document.createElement('div');
+  m.className = 'menu';
+  m.innerHTML = `<button data-a="history">History</button><button data-a="rename">Rename</button><button data-a="remove" class="danger">Remove from dashboard</button>`;
+  document.body.appendChild(m);
+  const r = e.currentTarget.getBoundingClientRect();
+  m.style.top = (r.bottom + window.scrollY + 4) + 'px';
+  m.style.left = Math.max(8, r.right + window.scrollX - m.offsetWidth) + 'px';
+  m.addEventListener('click', async ev => {
+    const a = ev.target.dataset.a; m.remove();
+    const d = devices.get(id);
+    if (a === 'history') location.hash = '#/history/' + encodeURIComponent(id);
+    else if (a === 'rename') {
+      const name = prompt('Device name', d.name);
+      if (name) await fetch('/api/devices/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+    } else if (a === 'remove') {
+      if (confirm(`Remove "${d.name}"? If its agent is still running it will re-appear. To stop it, run the uninstall command on that device.`))
+        await fetch('/api/devices/' + encodeURIComponent(id), { method: 'DELETE' });
+    }
+  });
+}
+document.addEventListener('click', () => document.querySelector('.menu')?.remove());
+
+// ---------- add device dialog ----------
+let osTab = 'win';
+function hubOrigins() {
+  const local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(location.hostname);
+  const lan = (info?.addresses || []).map(a => ({ url: `http://${a.address}:${info.port}`, label: `${a.address} (${a.name})` }));
+  const here = { url: location.origin, label: location.host + ' (this address)' };
+  return local ? lan.concat(lan.length ? [] : [here]) : [here, ...lan.filter(l => l.url !== here.url)];
+}
+function updateCmd() {
+  const hub = $('#hubSel').value;
+  const t = info.token;
+  $('#cmd').textContent = osTab === 'win'
+    ? `irm "${hub}/install.ps1?token=${t}" | iex`
+    : `curl -fsSL "${hub}/install.sh?token=${t}" | bash`;
+  $('#cmdRow').style.display = osTab === 'app' ? 'none' : '';
+  if (osTab === 'app') {
+    $('#cmdHint').innerHTML = 'On the other computer, open <a href="' + hub + '/download" target="_blank" style="color:var(--accent)">' + esc(hub) + '/download</a> to install the <b>Device Monitor</b> app, then open it and choose <b>Connect to a hub</b>. It finds this hub automatically, or enter <b>' + esc(hub.replace('http://', '')) + '</b>. That computer then shows up here and can view the dashboard too.';
+    $('#viewUrl').textContent = hub;
+    return;
+  }
+  $('#cmdHint').textContent = osTab === 'win'
+    ? 'Lightweight background agent, nothing to install, no admin needed. Paste into PowerShell on the other PC (Win+X → Terminal). Uninstall later with: irm ' + hub + '/uninstall.ps1 | iex'
+    : 'Paste into Terminal on the Mac or Linux machine. No sudo needed; it runs in the background and starts at login. Uninstall later with: curl -fsSL ' + hub + '/uninstall.sh | bash';
+  $('#viewUrl').textContent = hub;
+}
+$('#addBtn').addEventListener('click', async () => {
+  info = await (await fetch('/api/info')).json();
+  const sel = $('#hubSel');
+  sel.innerHTML = hubOrigins().map(o => `<option value="${o.url}">${esc(o.label)}</option>`).join('');
+  updateCmd();
+  $('#addDlg').showModal();
+});
+$('#hubSel').addEventListener('change', updateCmd);
+$('#addDone').addEventListener('click', () => $('#addDlg').close());
+$('#osTabs').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  osTab = b.dataset.os;
+  for (const x of $('#osTabs').children) x.classList.toggle('on', x === b);
+  updateCmd();
+});
+function copyFrom(btn, sel) {
+  const text = $(sel).textContent;
+  const done = () => { btn.textContent = 'Copied'; setTimeout(() => btn.textContent = 'Copy', 1500); };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(done);
+  else { const r = document.createRange(); r.selectNodeContents($(sel)); const s = getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand('copy'); done(); }
+}
+$('#copyBtn').addEventListener('click', e => copyFrom(e.currentTarget, '#cmd'));
+$('#copyView').addEventListener('click', e => copyFrom(e.currentTarget, '#viewUrl'));
+
+// ---------- card chart range (10 min / 60 min / 6 h) ----------
+const RANGE_MS = { '10m': 10 * 60e3, '1h': 60 * 60e3, '6h': 6 * 3600e3 };
+const RANGE_LABEL = { '10m': 'last 10 min', '1h': 'last 60 min', '6h': 'last 6 hours' };
+let range = RANGE_MS[localStorage.getItem('range')] ? localStorage.getItem('range') : '10m';
+const series = new Map();   // id -> { points, resolution } for the selected card range
+
+async function loadSeries(id) {
+  const want = range;
+  try {
+    const r = await (await fetch(`/api/history/${encodeURIComponent(id)}?range=${want}&points=360`)).json();
+    if (want !== range || !r.points) return;
+    series.set(id, { points: r.points, resolution: r.resolution });
+    drawChart(id);
+  } catch {}
+}
+function loadAllSeries() { for (const id of devices.keys()) loadSeries(id); }
+function appendSample(id, sample) {
+  const s = series.get(id) || (series.set(id, { points: [], resolution: 2000 }), series.get(id));
+  s.points.push(sample);
+  const cutoff = Date.now() - RANGE_MS[range];
+  while (s.points.length && s.points[0].t < cutoff) s.points.shift();
+}
+function syncRange() {
+  for (const b of $('#range').children) b.classList.toggle('on', b.dataset.r === range);
+  for (const el of document.querySelectorAll('.card .legend .range')) el.textContent = RANGE_LABEL[range];
+}
+$('#range').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  range = b.dataset.r; localStorage.setItem('range', range); syncRange();
+  series.clear(); for (const id of devices.keys()) drawChart(id);
+  loadAllSeries();
+});
+// Longer ranges are minute-averaged on the hub; refresh them now and then.
+setInterval(() => { if (range !== '10m') loadAllSeries(); }, 2 * 60e3);
+
+const clock = t => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+function timeLabel(t, span) {
+  const d = new Date(t);
+  if (span <= 36 * 3600e3) return clock(t);
+  return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) + (span <= 8 * 86400e3 ? ' ' + clock(t) : '');
+}
+
+// ---------- history page ----------
+const HV_RANGES = { '1h': 3600e3, '6h': 6 * 3600e3, '24h': 24 * 3600e3, '7d': 7 * 86400e3, '30d': 30 * 86400e3 };
+const toF = c => unit === 'F' ? c * 9 / 5 + 32 : c;
+const HV_CHARTS = [
+  { title: 'Utilization', max: 100, series: [['cpu', 'CPU', '--cpu'], ['gpu', 'GPU', '--gpu'], ['mem', 'Memory', '--mem']], fmt: v => fmtPct(v), axis: v => v + '%' },
+  { title: 'Temperature', series: [['cpuTemp', 'CPU', '--cpu'], ['gpuTemp', 'GPU', '--gpu']], conv: toF, fmt: v => fmtTemp(v), axis: v => Math.round(v) + '°' },
+  { title: 'GPU power', series: [['gpuPower', 'GPU', '--gpu']], fmt: v => Math.round(v) + ' W', axis: v => Math.round(v) + ' W' },
+  { title: 'Network', series: [['rx', 'Download', '--cpu'], ['tx', 'Upload', '--gpu']], fmt: fmtRate, axis: v => fmtBytes(v, 0) + '/s' },
+  { title: 'Disk I/O', series: [['dr', 'Read', '--cpu'], ['dw', 'Write', '--gpu']], fmt: fmtRate, axis: v => fmtBytes(v, 0) + '/s' },
+];
+const hv = { id: null, range: localStorage.getItem('hvRange') || '6h', from: 0, to: 0, zoomed: false, points: [], resolution: 60e3, hoverT: null, drag: null, charts: [], timer: null, seq: 0 };
+if (!HV_RANGES[hv.range]) hv.range = '6h';
+
+function route() {
+  const m = location.hash.match(/^#\/history\/(.+)$/);
+  if (m) openHistory(decodeURIComponent(m[1])); else closeHistory();
+}
+window.addEventListener('hashchange', route);
+$('#historyBtn').addEventListener('click', () => {
+  const first = [...devices.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9))[0];
+  location.hash = '#/history/' + encodeURIComponent(hv.id && devices.has(hv.id) ? hv.id : first ? first.id : '');
+});
+
+function closeHistory() {
+  document.body.classList.remove('history-mode');
+  $('#historyView').hidden = true;
+  clearInterval(hv.timer); hv.timer = null;
+  for (const id of devices.keys()) drawChart(id);
+}
+function openHistory(id) {
+  if (!id) return;
+  const changed = hv.id !== id;
+  hv.id = id;
+  document.body.classList.add('history-mode');
+  $('#historyView').hidden = false;
+  window.scrollTo(0, 0);
+  if (changed || !hv.points.length) { hv.zoomed = false; setHvWindow(); }
+  renderHvDevices();
+  loadHistory();
+  clearInterval(hv.timer);
+  hv.timer = setInterval(() => { if (!hv.zoomed) { setHvWindow(); loadHistory(); } }, 30e3);
+}
+function setHvWindow() { hv.to = Date.now(); hv.from = hv.to - HV_RANGES[hv.range]; }
+
+function renderHvDevices() {
+  const list = [...devices.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9));
+  $('#hvDevices').innerHTML = list.map(d => `<button data-id="${esc(d.id)}" class="${d.id === hv.id ? 'on' : ''}"><i class="${d.online ? 'on' : ''}"></i>${esc(d.name)}</button>`).join('');
+  const d = devices.get(hv.id);
+  $('#hvTitle').textContent = d ? d.name : 'Unknown device';
+  $('#hvSub').textContent = d ? [d.os, d.online ? 'online' : 'offline'].filter(Boolean).join(' · ') : '';
+  for (const b of $('#hvRange').children) b.classList.toggle('on', !hv.zoomed && b.dataset.r === hv.range);
+  $('#hvReset').hidden = !hv.zoomed;
+}
+$('#hvDevices').addEventListener('click', e => { const b = e.target.closest('button'); if (b) location.hash = '#/history/' + encodeURIComponent(b.dataset.id); });
+$('#hvRange').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  hv.range = b.dataset.r; localStorage.setItem('hvRange', hv.range); hv.zoomed = false; setHvWindow(); renderHvDevices(); loadHistory();
+});
+$('#hvReset').addEventListener('click', () => { hv.zoomed = false; setHvWindow(); renderHvDevices(); loadHistory(); });
+
+async function loadHistory() {
+  if (!hv.id) return;
+  const seq = ++hv.seq;
+  const w = Math.min(1200, Math.max(200, Math.round(($('#hvCharts').clientWidth || 900))));
+  try {
+    const r = await (await fetch(`/api/history/${encodeURIComponent(hv.id)}?from=${Math.round(hv.from)}&to=${Math.round(hv.to)}&points=${w}`)).json();
+    if (seq !== hv.seq) return;
+    hv.points = r.points || []; hv.resolution = r.resolution || 60e3;
+  } catch { hv.points = []; }
+  buildHvCharts(); renderTiles(); drawHv();
+}
+
+function renderTiles() {
+  const P = hv.points;
+  const stats = key => {
+    let sum = 0, n = 0, peak = null;
+    for (const p of P) {
+      const v = p[key], m = p[key + 'Max'] ?? v;
+      if (v != null) { sum += v; n++; }
+      if (m != null && (peak == null || m > peak)) peak = m;
+    }
+    return n ? { avg: sum / n, peak } : null;
+  };
+  const tiles = [];
+  const add = (label, color, key, fmt, avgLabel = 'avg') => {
+    const s = stats(key); if (!s) return;
+    tiles.push(`<div class="tile" style="--c:var(${color})"><div class="k">${label}</div><div class="v">${fmt(s.peak)}</div><div class="s">peak · ${avgLabel} ${fmt(s.avg)}</div></div>`);
+  };
+  add('CPU', '--cpu', 'cpu', fmtPct);
+  add('GPU', '--gpu', 'gpu', fmtPct);
+  add('Memory', '--mem', 'mem', fmtPct);
+  add('CPU temp', '--cpu', 'cpuTemp', fmtTemp);
+  add('GPU temp', '--gpu', 'gpuTemp', fmtTemp);
+  add('GPU power', '--gpu', 'gpuPower', v => Math.round(v) + ' W');
+  $('#hvTiles').innerHTML = tiles.join('') || '';
+}
+
+function buildHvCharts() {
+  const box = $('#hvCharts');
+  const present = HV_CHARTS.map(c => ({ ...c, series: c.series.filter(([k]) => hv.points.some(p => p[k] != null)) })).filter(c => c.series.length);
+  if (!present.length) { box.innerHTML = `<div class="hv-chart hv-empty">No history for this time range yet. Data is recorded while the device is online.</div>`; hv.charts = []; return; }
+  const sig = present.map(c => c.title + c.series.map(s => s[0]).join()).join('|');
+  if (box.dataset.sig === sig) { hv.charts.forEach((c, i) => c.cfg = present[i]); return; }
+  box.dataset.sig = sig;
+  box.innerHTML = present.map(c => `<div class="hv-chart"><h3>${c.title}</h3><div class="legend">${c.series.map(([, l, v]) => `<span style="--c:var(${v})">${l}</span>`).join('')}</div><canvas></canvas><div class="tip"></div></div>`).join('');
+  hv.charts = [...box.querySelectorAll('.hv-chart')].map((el, i) => ({ cfg: present[i], canvas: $('canvas', el), tip: $('.tip', el) }));
+  for (const ch of hv.charts) attachHvEvents(ch);
+}
+
+const PAD = { l: 58, r: 10, t: 8, b: 22 };
+function hvX(t, W) { return PAD.l + (t - hv.from) / (hv.to - hv.from) * (W - PAD.l - PAD.r); }
+function hvT(x, W) { return hv.from + (x - PAD.l) / (W - PAD.l - PAD.r) * (hv.to - hv.from); }
+function niceMax(v) {
+  if (!(v > 0)) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v))), m = v / p;
+  return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10) * p;
+}
+
+function drawHv() { for (const ch of hv.charts) drawHvChart(ch); }
+function drawHvChart(ch) {
+  const { canvas, tip, cfg } = ch;
+  const css = getComputedStyle(document.documentElement);
+  const dpr = window.devicePixelRatio || 1, W = canvas.clientWidth, H = canvas.clientHeight;
+  if (!W) return;
+  if (canvas.width !== W * dpr || canvas.height !== H * dpr) { canvas.width = W * dpr; canvas.height = H * dpr; }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  const conv = cfg.conv || (v => v);
+  const P = hv.points;
+  let yMin = 0, yMax = cfg.max;
+  if (!yMax) {
+    let hi = 0;
+    for (const p of P) for (const [k] of cfg.series) { const v = p[k + 'Max'] ?? p[k]; if (v != null) hi = Math.max(hi, conv(v)); }
+    yMax = niceMax(hi * 1.1);
+  }
+  const ch_ = H - PAD.t - PAD.b;
+  const y = v => PAD.t + ch_ - (conv(v) - yMin) / (yMax - yMin) * ch_;
+  // grid + y labels
+  ctx.font = '10px Segoe UI, system-ui, sans-serif'; ctx.textBaseline = 'middle'; ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const v = yMin + (yMax - yMin) * i / 4, py = Math.round(PAD.t + ch_ - ch_ * i / 4) + 0.5;
+    ctx.strokeStyle = css.getPropertyValue(i === 0 ? '--axis' : '--grid'); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(PAD.l, py); ctx.lineTo(W - PAD.r, py); ctx.stroke();
+    if (i % 2 === 0) { ctx.fillStyle = css.getPropertyValue('--text-muted'); ctx.fillText(cfg.axis(v), PAD.l - 6, py); }
+  }
+  // x labels
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillStyle = css.getPropertyValue('--text-muted');
+  const span = hv.to - hv.from, nx = Math.max(2, Math.min(7, Math.floor((W - PAD.l) / 140)));
+  for (let i = 0; i <= nx; i++) {
+    const t = hv.from + span * i / nx, px = hvX(t, W);
+    ctx.textAlign = i === 0 ? 'left' : i === nx ? 'right' : 'center';
+    ctx.fillText(timeLabel(t, span), px, H - PAD.b + 6);
+  }
+  const gap = Math.max(10e3, hv.resolution * 3);
+  ctx.save(); ctx.beginPath(); ctx.rect(PAD.l, PAD.t, W - PAD.l - PAD.r, ch_); ctx.clip();
+  for (const [k, , v] of cfg.series) {
+    const color = css.getPropertyValue(v).trim();
+    // peak band (avg -> max), only when points are aggregated
+    if (P.some(p => p[k + 'Max'] != null && p[k] != null && p[k + 'Max'] > p[k] + 0.5)) {
+      ctx.fillStyle = color; ctx.globalAlpha = 0.14;
+      let seg = [];
+      const flush = () => {
+        if (seg.length > 1) {
+          ctx.beginPath();
+          seg.forEach((p, i) => i ? ctx.lineTo(hvX(p.t, W), y(p[k + 'Max'] ?? p[k])) : ctx.moveTo(hvX(p.t, W), y(p[k + 'Max'] ?? p[k])));
+          for (let i = seg.length - 1; i >= 0; i--) ctx.lineTo(hvX(seg[i].t, W), y(seg[i][k]));
+          ctx.closePath(); ctx.fill();
+        }
+        seg = [];
+      };
+      let prevT = 0;
+      for (const p of P) { if (p[k] == null || (seg.length && p.t - prevT > gap)) flush(); if (p[k] != null) { seg.push(p); prevT = p.t; } }
+      flush(); ctx.globalAlpha = 1;
+    }
+    ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.beginPath(); let pen = false, prevT = 0;
+    for (const p of P) {
+      if (p[k] == null) { pen = false; continue; }
+      if (pen && p.t - prevT > gap) pen = false;
+      pen ? ctx.lineTo(hvX(p.t, W), y(p[k])) : ctx.moveTo(hvX(p.t, W), y(p[k]));
+      pen = true; prevT = p.t;
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+  // drag selection
+  if (hv.drag && hv.drag.x2 != null) {
+    const x1 = Math.max(PAD.l, Math.min(hv.drag.x1, hv.drag.x2)), x2 = Math.min(W - PAD.r, Math.max(hv.drag.x1, hv.drag.x2));
+    ctx.fillStyle = css.getPropertyValue('--accent'); ctx.globalAlpha = 0.18; ctx.fillRect(x1, PAD.t, x2 - x1, ch_); ctx.globalAlpha = 1;
+  }
+  // crosshair + tooltip (shared across charts)
+  tip.style.display = 'none';
+  if (hv.hoverT != null && P.length) {
+    let best = null; for (const p of P) if (!best || Math.abs(p.t - hv.hoverT) < Math.abs(best.t - hv.hoverT)) best = p;
+    if (best && Math.abs(best.t - hv.hoverT) <= Math.max(gap, span / 50)) {
+      const px = hvX(best.t, W);
+      ctx.strokeStyle = css.getPropertyValue('--text-muted'); ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(Math.round(px) + 0.5, PAD.t); ctx.lineTo(Math.round(px) + 0.5, PAD.t + ch_); ctx.stroke();
+      const rows = [];
+      for (const [k, label, v] of cfg.series) {
+        if (best[k] == null) continue;
+        ctx.fillStyle = css.getPropertyValue(v); ctx.strokeStyle = css.getPropertyValue('--surface-1'); ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(px, y(best[k]), 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+        const peak = best[k + 'Max'] != null && best[k + 'Max'] > best[k] + 0.5 ? ` <span class="hint">peak ${cfg.fmt(best[k + 'Max'])}</span>` : '';
+        rows.push(`<div class="row" style="--c:var(${v})">${label} <b>${cfg.fmt(best[k])}</b>${peak}</div>`);
+      }
+      if (rows.length) {
+        const res = hv.resolution > 2500 ? ` · ${hv.resolution >= 3600e3 ? Math.round(hv.resolution / 3600e3) + ' h' : Math.round(hv.resolution / 60e3) + ' min'} avg` : '';
+        tip.innerHTML = `<div class="t">${new Date(best.t).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit', second: hv.resolution <= 2500 ? '2-digit' : undefined })}${res}</div>` + rows.join('');
+        tip.style.display = 'block';
+        const tw = tip.offsetWidth;
+        tip.style.left = (px + 12 + tw > W ? px - tw - 12 : px + 12) + 'px';
+      }
+    }
+  }
+}
+
+function attachHvEvents(ch) {
+  const c = ch.canvas;
+  const xOf = e => e.clientX - c.getBoundingClientRect().left;
+  c.addEventListener('pointerdown', e => { if (e.button !== 0) return; hv.drag = { x1: xOf(e), x2: null, W: c.clientWidth }; try { c.setPointerCapture(e.pointerId); } catch {} });
+  c.addEventListener('pointermove', e => {
+    const x = xOf(e);
+    hv.hoverT = hvT(x, c.clientWidth);
+    if (hv.drag) hv.drag.x2 = x;
+    drawHv();
+  });
+  c.addEventListener('pointerleave', () => { if (!hv.drag) { hv.hoverT = null; drawHv(); } });
+  c.addEventListener('pointerup', () => {
+    const d = hv.drag; hv.drag = null;
+    if (d && d.x2 != null && Math.abs(d.x2 - d.x1) > 8) {
+      const a = hvT(Math.min(d.x1, d.x2), d.W), b = hvT(Math.max(d.x1, d.x2), d.W);
+      const from = Math.max(hv.from, a), to = Math.min(hv.to, b);
+      if (to - from >= 60e3) { hv.from = from; hv.to = to; hv.zoomed = true; renderHvDevices(); loadHistory(); return; }
+    }
+    drawHv();
+  });
+  c.addEventListener('dblclick', () => { if (hv.zoomed) { hv.zoomed = false; setHvWindow(); renderHvDevices(); loadHistory(); } });
+}
+window.addEventListener('resize', () => { if (!$('#historyView').hidden) drawHv(); });
+
+// ---------- app settings (only inside the desktop app) ----------
+const appApi = window.deviceMonitorApp;
+if (appApi && appApi.getSettings) document.documentElement.classList.add('has-settings');
+
+async function openSettings() {
+  let s;
+  try { s = await appApi.getSettings(); } catch { return; }
+  $('#setRole').textContent = s.mode === 'host' ? 'Hosting the dashboard for your devices'
+    : s.mode === 'client' ? `Connected to the hub at ${s.hubUrl}` : 'Not set up';
+  $('#setLink').textContent = s.shareUrl || '';
+  $('#setLinkRow').hidden = !s.shareUrl;
+  $('#setFwRow').hidden = !s.canAllowFirewall;
+  $('#setFw').textContent = 'Allow…'; $('#setFw').disabled = false;
+  $('#setStartup').checked = !!s.startup;
+  $('#setStartup').disabled = !s.canSetStartup;
+  $('#setVersion').textContent = 'Version ' + s.version;
+  settingsMode = s.mode;
+  renderUpdateRow(s);
+  syncUnit();
+  $('#settingsDlg').showModal();
+}
+let settingsMode = null;
+$('#settingsBtn').addEventListener('click', openSettings);
+$('#setDone').addEventListener('click', () => $('#settingsDlg').close());
+$('#setCopy').addEventListener('click', async e => {
+  await appApi.copyLink();
+  e.currentTarget.textContent = 'Copied'; setTimeout(() => { $('#setCopy').textContent = 'Copy'; }, 1500);
+});
+$('#setFw').addEventListener('click', async () => {
+  const b = $('#setFw'); b.disabled = true; b.textContent = 'Approve the Windows prompt…';
+  const ok = await appApi.allowFirewall();
+  b.textContent = ok ? 'Allowed ✓' : 'Not changed'; b.disabled = false;
+});
+$('#setStartup').addEventListener('change', async e => { e.target.checked = await appApi.setStartup(e.target.checked); });
+$('#setUnit').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (b) $(`#unit button[data-u="${b.dataset.u}"]`).click();
+});
+$('#setChange').addEventListener('click', () => {
+  const msg = settingsMode === 'host'
+    ? 'Stop hosting the dashboard on this computer?\n\nOther devices that report to it will show as offline until a hub is set up again. You can then choose Host or Connect.'
+    : 'Disconnect from this hub and choose again?\n\nYou can then pick a different hub or host the dashboard here.';
+  if (confirm(msg)) appApi.changeSetup();
+});
+$('#setQuit').addEventListener('click', () => {
+  const msg = settingsMode === 'host'
+    ? 'Quit Device Monitor?\n\nThis computer hosts the dashboard, so it will stop for all devices until the app is opened again.'
+    : 'Quit Device Monitor?\n\nThis computer will stop reporting until the app is opened again.';
+  if (confirm(msg)) appApi.quit();
+});
+
+// ---------- updates (Settings → Updates) ----------
+const latestVersions = {};   // platform -> newest published version (from the hub)
+const platformKey = p => (p === 'windows' ? 'windows' : p === 'macos' ? 'mac' : null);
+function versionLabel(d) {
+  const v = d.latest?.appVersion;
+  if (!v) return null;
+  const want = latestVersions[platformKey(d.platform)];
+  return want && want !== v ? `v${v} → ${want}` : `v${v}`;
+}
+async function loadLatestVersions() {
+  for (const p of ['windows', 'mac']) {
+    try { const r = await fetch('/api/update/' + p); if (r.ok) latestVersions[p] = (await r.json()).version; } catch {}
+  }
+  renderGrid();
+}
+
+function describeUpdate(u, s) {
+  switch (u.state) {
+    case 'checking': return ['Checking for updates…', null];
+    case 'downloading': return [`Downloading version ${u.version}…`, null];
+    case 'ready': return [`Version ${u.version} is ready.`, 'Restart to update'];
+    case 'installing': return [`Installing version ${u.version}…`, null];
+    case 'available': return [`Version ${u.version} is available.`, s.canAutoUpdate ? 'Install now' : 'Download…'];
+    case 'error': return [`Couldn't update: ${u.message}`, 'Try again'];
+    case 'unavailable': return ['Updates are turned off in this build.', null];
+    default: return [`You're up to date (${s.version}).`, 'Check now'];
+  }
+}
+function renderUpdateRow(s) {
+  const [text, action] = describeUpdate(s.update || {}, s);
+  $('#setUpdateText').textContent = text;
+  const b = $('#setUpdateBtn');
+  b.hidden = !action; b.textContent = action || ''; b.disabled = false;
+  b.dataset.action = s.update?.state === 'ready' || s.update?.state === 'available' ? 'install' : 'check';
+  $('#setAutoUpdateRow').hidden = !s.canAutoUpdate;
+  $('#setAutoUpdate').checked = !!s.autoUpdate;
+}
+$('#setUpdateBtn').addEventListener('click', async () => {
+  const b = $('#setUpdateBtn'); b.disabled = true;
+  if (b.dataset.action === 'install') await appApi.installUpdate();
+  else { $('#setUpdateText').textContent = 'Checking for updates…'; await appApi.checkForUpdates(); }
+  renderUpdateRow(await appApi.getSettings());
+});
+$('#setAutoUpdate').addEventListener('change', async e => { e.target.checked = await appApi.setAutoUpdate(e.target.checked); });
+
+// ---------- unit toggle ----------
+function syncUnit() { for (const b of document.querySelectorAll('#unit button, #setUnit button')) b.classList.toggle('on', b.dataset.u === unit); }
+$('#unit').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  unit = b.dataset.u; localStorage.setItem('unit', unit); syncUnit(); renderGrid();
+  if (!$('#historyView').hidden) { renderTiles(); drawHv(); }
+});
+syncUnit();
+window.addEventListener('resize', () => { for (const id of devices.keys()) drawChart(id); });
+syncRange();
+renderGrid();
+connect();
+route();
+loadLatestVersions();
+</script>
+</body>
+</html>

@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Download Device Monitor</title>
+<style>
+  :root { color-scheme: dark; --page: #0d0d0d; --surface-1: #1a1a19; --surface-2: #232321; --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #898781; --border: rgba(255,255,255,0.10); --accent: #9085e9; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--text-primary); font: 15px/1.5 "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 56px 24px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; color: var(--text-secondary); margin-bottom: 28px; }
+  .brand svg { color: var(--accent); }
+  h1 { font-size: 28px; font-weight: 600; margin: 0 0 8px; }
+  .lead { color: var(--text-secondary); margin: 0 0 28px; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 20px; margin-bottom: 14px; }
+  .card.primary { border-color: var(--accent); }
+  .row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .row .info { flex: 1; min-width: 200px; }
+  .name { font-weight: 600; }
+  .meta { color: var(--text-muted); font-size: 13px; }
+  a.btn { display: inline-block; text-decoration: none; color: var(--text-primary); background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 9px 16px; font-weight: 600; }
+  a.btn.primary { background: var(--accent); color: #0b0b0b; border-color: transparent; }
+  ol { color: var(--text-secondary); padding-left: 20px; margin: 14px 0 0; }
+  ol li { margin: 4px 0; }
+  code { font: 13px/1.5 Consolas, ui-monospace, monospace; background: #0b0b0b; border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; }
+  .cmd { display: block; padding: 10px 12px; word-break: break-all; margin-top: 10px; user-select: all; }
+  .muted { color: var(--text-muted); font-size: 13px; }
+  h2 { font-size: 15px; margin: 30px 0 10px; color: var(--text-secondary); font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4M7 12l3-3 2 2 4-4"/></svg>
+    Device Monitor
+  </div>
+  <h1>Install Device Monitor</h1>
+  <p class="lead">Install the app on this computer, open it and choose <b>Connect to a hub</b>. It finds this hub automatically, then this computer shows up on the dashboard and can view it too.</p>
+  <div id="list"><p class="muted">Loading…</p></div>
+  <h2>Just want to look?</h2>
+  <p class="muted">The dashboard also works in any browser: <a id="dash" href="/" style="color: var(--accent)"></a></p>
+</main>
+<script>
+const os = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? 'mac' : /Win/.test(navigator.platform || navigator.userAgent) ? 'windows' : 'other';
+document.getElementById('dash').textContent = location.origin;
+const fmtSize = b => b > 1e9 ? (b / 1e9).toFixed(1) + ' GB' : Math.round(b / 1e6) + ' MB';
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const steps = {
+  windows: '<ol><li>Run the installer. If Windows SmartScreen appears, click <b>More info → Run anyway</b> (the app isn\'t code-signed).</li><li>Choose <b>Connect to a hub</b> and pick this hub.</li></ol>',
+  mac: '<ol><li>Open the .dmg and drag Device Monitor to Applications.</li><li>The first time, <b>right-click the app → Open</b> (it isn\'t notarized by Apple).</li><li>Choose <b>Connect to a hub</b> and pick this hub.</li></ol>',
+};
+(async () => {
+  const [files, info] = await Promise.all([fetch('/api/downloads').then(r => r.json()), fetch('/api/info').then(r => r.json())]);
+  const card = (f, primary) => `<div class="card ${primary ? 'primary' : ''}"><div class="row"><div class="info"><div class="name">${f.platform === 'windows' ? 'Windows' : 'macOS'} app</div><div class="meta">${esc(f.name)} · ${fmtSize(f.size)}</div></div><a class="btn ${primary ? 'primary' : ''}" href="/download/${encodeURIComponent(f.name)}" download>Download</a></div>${primary ? steps[f.platform] : ''}</div>`;
+  const forOs = files.filter(f => f.platform === os), others = files.filter(f => f.platform !== os);
+  let html = forOs.map((f, i) => card(f, i === 0)).join('');
+  if (os === 'mac' && !forOs.length) {
+    const cmd = `curl -fsSL "${location.origin}/install.sh?token=${info.token}" | bash`;
+    html += `<div class="card primary"><div class="name">macOS</div><p class="muted" style="margin:6px 0 0">The Mac app hasn't been built yet. In the meantime, add this Mac to the dashboard by pasting this into <b>Terminal</b>. It runs a small background agent (no sudo):</p><code class="cmd">${esc(cmd)}</code><p class="muted">Then view the dashboard in your browser at the address below.</p></div>`;
+  }
+  html += others.map(f => card(f, false)).join('');
+  document.getElementById('list').innerHTML = html || '<p class="muted">No installers have been added to this hub yet.</p>';
+})();
+</script>
+</body>
+</html>

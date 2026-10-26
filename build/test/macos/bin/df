@@ -1,0 +1,10 @@
+#!/bin/bash
+cat <<'X'
+Filesystem     1024-blocks      Used Available Capacity iused      ifree %iused  Mounted on
+/dev/disk3s1s1   971350180  10450132 612345678     2%  404167 4294967295    0%   /
+devfs                  211       211         0   100%     730          0  100%   /dev
+/dev/disk3s6     971350180   4194324 612345678     1%       4 6123456780    0%   /System/Volumes/VM
+/dev/disk3s5     971350180 330123456 612345678    35% 1234567 6123456780    0%   /System/Volumes/Data
+map auto_home            0         0         0   100%       0          0     -   /System/Volumes/Data/home
+/dev/disk5s1    1953514584 812345678 1141168906    42%   12345 11411689060    0%   /Volumes/T7 Shield
+X

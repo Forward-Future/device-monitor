@@ -1,0 +1,2 @@
+#!/bin/bash
+case "$1" in -c) echo 61.4 ;; -g) echo 55.2 ;; esac

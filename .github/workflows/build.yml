@@ -1,0 +1,36 @@
+# Builds the Windows installer and the macOS app (universal: Apple Silicon + Intel).
+# Run it from the Actions tab ("Run workflow") or by pushing a tag like v1.1.0.
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            script: dist
+          - os: macos-latest
+            script: dist:mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run ${{ matrix.script }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # no signing certificate; macOS build is ad-hoc signed
+      - uses: actions/upload-artifact@v4
+        with:
+          name: device-monitor-${{ matrix.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error

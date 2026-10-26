@@ -1,0 +1,19 @@
+#!/bin/bash
+case "$*" in
+  *IOPlatformExpertDevice*) echo '  |   "IOPlatformUUID" = "1A2B3C4D-1111-2222-3333-444455556666"' ;;
+  *IOBlockStorageDriver*) n=$(_counter disk)
+    echo '+-o IOBlockStorageDriver  <class IOBlockStorageDriver, id 0x100000412, registered, matched, active, busy 0 (0 ms), retain 7>'
+    echo '    {'
+    echo "      \"Statistics\" = {\"Operations (Write)\"=1234,\"Latency Time (Write)\"=0,\"Bytes (Read)\"=$((120000000000 + n * 50000000)),\"Errors (Write)\"=0,\"Total Time (Read)\"=1,\"Retries (Read)\"=0,\"Total Time (Write)\"=1,\"Bytes (Write)\"=$((98000000000 + n * 20000000)),\"Operations (Read)\"=5678,\"Retries (Write)\"=0}"
+    echo '    }' ;;
+  *IOAccelerator*) cat <<'X'
++-o AGXAcceleratorG15X  <class AGXAcceleratorG15X, id 0x1000003b3, registered, matched, active, busy 0 (0 ms), retain 52>
+    {
+      "IOClass" = "AGXAcceleratorG15X"
+      "gpu-core-count" = 40
+      "PerformanceStatistics" = {"In use system memory (driver)"=0,"Alloc system memory"=4423761920,"Tiler Utilization %"=12,"recoveryCount"=0,"Renderer Utilization %"=31,"SplitSceneCount"=0,"Device Utilization %"=33,"Allocated PB Size"=1572864,"In use system memory"=2147483648}
+      "model" = "Apple M3 Max"
+    }
+X
+  ;;
+esac

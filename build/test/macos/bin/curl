@@ -1,0 +1,2 @@
+#!/bin/bash
+while [ $# -gt 0 ]; do [ "$1" = "--data-binary" ] && { printf '%s\n' "$2" >> "$MOCK_STATE/bodies"; }; shift; done

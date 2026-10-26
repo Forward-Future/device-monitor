@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'self'; img-src 'self' data:">
+<title>Device Monitor — Setup</title>
+<style>
+  :root { color-scheme: dark; --page: #0d0d0d; --surface-1: #1a1a19; --surface-2: #232321; --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #898781; --border: rgba(255,255,255,0.10); --accent: #9085e9; --critical: #e66767; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--page); color: var(--text-primary); font: 14px/1.5 "Segoe UI Variable", "Segoe UI", system-ui, sans-serif; display: flex; flex-direction: column; }
+  .titlebar { height: 64px; flex: none; -webkit-app-region: drag; display: flex; align-items: center; padding: 0 24px; gap: 10px; font-weight: 600; }
+  .titlebar img { width: 22px; height: 22px; }
+  .platform-darwin .titlebar { padding-left: 92px; }
+  .mac-only { display: none; } .platform-darwin .mac-only { display: list-item; } .platform-darwin .win-only { display: none; }
+  main { flex: 1; display: grid; place-items: center; padding: 24px; }
+  .wrap { width: min(860px, 100%); }
+  h1 { font-size: 26px; font-weight: 600; margin: 0 0 6px; }
+  .lead { color: var(--text-secondary); margin: 0 0 28px; }
+  .options { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 700px) { .options { grid-template-columns: 1fr; } }
+  .opt { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 22px; display: flex; flex-direction: column; gap: 12px; }
+  .opt h2 { font-size: 17px; margin: 0; }
+  .opt p { margin: 0; color: var(--text-secondary); }
+  .opt ul { margin: 0; padding-left: 18px; color: var(--text-secondary); }
+  .tag { align-self: flex-start; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); }
+  button { font: inherit; color: inherit; cursor: pointer; border-radius: 8px; padding: 9px 14px; border: 1px solid var(--border); background: var(--surface-2); }
+  button:hover { background: #2c2c2a; }
+  button.primary { background: var(--accent); border-color: transparent; color: #0b0b0b; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.08); background: var(--accent); }
+  button:disabled { opacity: .6; cursor: default; }
+  .spacer { flex: 1; }
+  input { font: inherit; color: var(--text-primary); background: #0b0b0b; border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; width: 100%; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .row { display: flex; gap: 8px; }
+  .found { display: flex; flex-direction: column; gap: 6px; }
+  .found button { text-align: left; display: flex; justify-content: space-between; gap: 10px; }
+  .found small { color: var(--text-muted); }
+  .hint { color: var(--text-muted); font-size: 12px; }
+  .error { color: var(--critical); font-size: 13px; min-height: 20px; }
+  .busy { color: var(--text-secondary); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="titlebar"><img src="../build/icon.png" alt="">Device Monitor</div>
+<main><div class="wrap">
+  <h1>Set up this PC</h1>
+  <p class="lead">Choose one PC to host the dashboard. Every other device connects to it, then shows up automatically.</p>
+  <div class="options">
+    <section class="opt">
+      <span class="tag">Main PC</span>
+      <h2>Host the dashboard here</h2>
+      <p>This PC collects stats from all your devices and serves the dashboard.</p>
+      <ul>
+        <li>Monitors this PC automatically</li>
+        <li>View it from phones and other PCs in a browser</li>
+        <li class="win-only">Windows will ask once to allow network access</li>
+        <li class="mac-only">macOS may ask to allow incoming connections. Click Allow</li>
+      </ul>
+      <div class="spacer"></div>
+      <button class="primary" id="hostBtn">Host on this PC</button>
+    </section>
+    <section class="opt">
+      <span class="tag">Any other PC</span>
+      <h2>Connect to a hub</h2>
+      <p>Adds this PC to an existing dashboard and lets you view it here.</p>
+      <div class="found" id="found"><span class="busy" id="scan">Looking for hubs on your network…</span></div>
+      <div class="row"><input id="addr" placeholder="Hub address, e.g. 192.168.1.20" spellcheck="false"><button class="primary" id="connectBtn">Connect</button></div>
+      <div class="hint">The address is shown in the hub's tray menu and in its “+ Add device” dialog.</div>
+    </section>
+  </div>
+  <p class="error" id="err"></p>
+</div></main>
+<script src="setup.js"></script>
+</body>
+</html>

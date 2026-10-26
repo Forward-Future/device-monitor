@@ -1,0 +1,5 @@
+#!/bin/bash
+case "$2" in
+  machdep.cpu.brand_string) echo "Apple M3 Max" ;; hw.logicalcpu) echo 16 ;; hw.memsize) echo 68719476736 ;;
+  kern.boottime) echo "{ sec = $(( $(date +%s) - 93784 )), usec = 512345 } Sat Oct 25 08:00:00 2026" ;;
+esac
