@@ -28,6 +28,9 @@ $cpuInfo = Get-CimInstance Win32_Processor | Select-Object -First 1
 $osName = "$($osInfo.Caption)".Replace('Microsoft ', '')
 $nvsmi = (Get-Command nvidia-smi -ErrorAction SilentlyContinue).Source
 if (-not $nvsmi -and (Test-Path "$env:SystemRoot\System32\nvidia-smi.exe")) { $nvsmi = "$env:SystemRoot\System32\nvidia-smi.exe" }
+# Laptops/tablets (chassis types: portable, laptop, notebook, sub-notebook, tablet, convertible, detachable...)
+$chassis = @((Get-CimInstance Win32_SystemEnclosure).ChassisTypes)
+$formFactor = if ($chassis | Where-Object { $_ -in 8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32 }) { 'laptop' } else { 'desktop' }
 $videoControllers = @(Get-CimInstance Win32_VideoController | Where-Object { $_.Name -notmatch 'Basic|Virtual|Remote|Mirage|Parsec' })
 
 function Num($v) { if ($null -eq $v -or "$v" -match 'N/A|Not Supported|\[') { return $null }; try { return [double]$v } catch { return $null } }
@@ -48,7 +51,7 @@ while ($true) {
   $now = [DateTime]::UtcNow
   $payload = [ordered]@{
     id = $deviceId; token = $Token; hostname = $env:COMPUTERNAME; platform = 'windows'; os = $osName
-    uptime = [int]((Get-Date) - $osInfo.LastBootUpTime).TotalSeconds
+    uptime = [int]((Get-Date) - $osInfo.LastBootUpTime).TotalSeconds; formFactor = $formFactor
   }
   if ($env:DM_APP_VERSION) { $payload.appVersion = $env:DM_APP_VERSION }   # set when run by the desktop app
 
@@ -107,6 +110,8 @@ while ($true) {
   $temps = @(); $fans = @()
   $sensors = Get-HwSensors
   if ($sensors) {
+    $cpuP = $sensors | Where-Object { $_.SensorType -eq 'Power' -and $_.Parent -match 'cpu' -and $_.Name -match 'Package' } | Select-Object -First 1
+    if ($cpuP -and $cpuP.Value -gt 0) { $payload.power = [ordered]@{ cpu = [math]::Round($cpuP.Value, 1) } }
     foreach ($s in $sensors) {
       if ($s.SensorType -eq 'Temperature') { $temps += [ordered]@{ name = $s.Name; parent = $s.Parent; value = [math]::Round($s.Value, 1) } }
       elseif ($s.SensorType -eq 'Fan' -and $s.Value -gt 0) { $fans += [ordered]@{ name = $s.Name; rpm = [math]::Round($s.Value) } }

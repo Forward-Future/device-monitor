@@ -24,6 +24,8 @@
     --accent: #9085e9;
   }
   * { box-sizing: border-box; }
+  /* Always reserve the scrollbar's space, so the header doesn't shift when a page starts or stops scrolling. */
+  html { scrollbar-gutter: stable; }
   body { margin: 0; background: var(--page); color: var(--text-primary);
     font: 14px/1.4 "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif; }
   button { font: inherit; color: inherit; cursor: pointer; }
@@ -165,11 +167,52 @@
   .hv-chart .tip { top: 40px; }
   .hv-empty { color: var(--text-secondary); padding: 40px 0; text-align: center; }
   @media (max-width: 520px) { #historyView { padding: 12px; } }
-  /* ---------- app settings (desktop app only) ---------- */
-  #settingsBtn { display: none; background: none; border-color: transparent; color: var(--text-muted); padding: 7px; }
+  /* ---------- advanced page (power & usage) ---------- */
+  body.adv-mode #grid, body.adv-mode #range { display: none; }
+  #advView { padding: 20px 24px 40px; max-width: 1280px; margin: 0 auto; }
+  #advView[hidden] { display: none; }
+  #advView .hv-bar h2 { margin: 0; font-size: 20px; font-weight: 600; }
+  .adv-h { margin: 26px 0 12px; font-size: 13px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; }
+  .adv-h:first-of-type { margin-top: 4px; }
+  #advTiles .tile .k::before { display: none; }
+  .adv-price { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--text-secondary); font-size: 13px; margin: -6px 0 16px; }
+  .adv-price b { color: var(--text-primary); font-weight: 600; }
+  .adv-price .btn { padding: 4px 10px; font-size: 12px; }
+  #advChart { width: 100%; height: 200px; display: block; }
+  .adv-wrap { overflow-x: auto; background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; }
+  .adv-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .adv-table th, .adv-table td { padding: 9px 14px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--border); }
+  .adv-table tr:last-child td { border-bottom: 0; }
+  .adv-table th { color: var(--text-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  .adv-table th:first-child, .adv-table td:first-child { text-align: left; }
+  .adv-table td:first-child { font-weight: 600; }
+  .adv-table td:first-child i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 8px; background: var(--c); vertical-align: 0; }
+  .adv-table .muted { color: var(--text-muted); }
+  .adv-table .src { text-align: left; color: var(--text-secondary); font-size: 12px; }
+  .adv-table tfoot td { font-weight: 600; border-top: 1px solid var(--axis); border-bottom: 0; }
+  .share { display: inline-block; width: 60px; height: 6px; background: var(--grid); border-radius: 4px; overflow: hidden; vertical-align: middle; margin-left: 8px; }
+  .share > span { display: block; height: 100%; background: var(--c); border-radius: 4px; }
+  #advNote { margin-top: 14px; max-width: 900px; }
+  .set-price { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .set-price input { width: 84px; background: var(--surface-2); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font: inherit; text-align: right; }
+  #setRegion { max-width: 220px; }
+  .set-row.wrap { flex-wrap: wrap; row-gap: 8px; }
+  .set-row.wrap .set-price { flex-basis: 100%; justify-content: flex-start; }
+  @media (max-width: 520px) { #advView { padding: 12px; } }
+  /* History / Advanced: compact icon toggles, lit while their page is open */
+  header .view-btn { width: 34px; padding: 0; justify-content: center; background: none; border-color: transparent; color: var(--text-muted); }
+  header .view-btn:hover { color: var(--text-primary); background: var(--surface-2); }
+  header #addBtn { width: 34px; padding: 0; justify-content: center; }
+  header .view-btn.on { color: var(--accent); background: rgba(144,133,233,0.14); border-color: rgba(144,133,233,0.45); }
+  /* ---------- settings (app-only rows are hidden in a browser) ---------- */
+  #settingsBtn { display: inline-flex; background: none; border-color: transparent; color: var(--text-muted); padding: 7px; }
   #settingsBtn:hover { color: var(--text-primary); background: var(--surface-2); }
-  .has-settings #settingsBtn { display: inline-flex; }
-  @media (max-width: 760px) { .has-settings #unit { display: none; } }   /* unit lives in Settings when space is tight */
+  html:not(.has-settings) .app-only { display: none !important; }
+  #updateBtn { color: var(--good); background: rgba(12,163,12,0.12); border-color: rgba(12,163,12,0.5); font-weight: 600; }
+  #updateBtn:hover:not(:disabled) { background: rgba(12,163,12,0.2); }
+  #updateBtn:disabled { opacity: .75; cursor: default; }
+  #updateBtn[hidden] { display: none; }
+  @media (max-width: 700px) { #updateBtn .short { display: none; } }   /* icon only */
   #settingsDlg { width: min(520px, calc(100vw - 24px)); }
   .set-section { border-top: 1px solid var(--border); padding: 6px 0; }
   .set-section:first-of-type { margin-top: 14px; }
@@ -185,6 +228,13 @@
   .switch:checked::after { transform: translateX(16px); background: #0b0b0b; }
   .switch:disabled { opacity: .5; cursor: default; }
   #settingsDlg .dlg-foot { align-items: center; gap: 8px; border-top: 1px solid var(--border); padding-top: 14px; margin-top: 6px; }
+  .legacy-banner { display: flex; align-items: center; gap: 12px; margin: 20px 24px 0; padding: 12px 14px; border-radius: 10px;
+    background: rgba(250,178,25,0.08); border: 1px solid rgba(250,178,25,0.35); }
+  .legacy-banner[hidden] { display: none; }
+  .legacy-banner svg { color: var(--warning); flex: none; }
+  .legacy-banner span { flex: 1; min-width: 0; }
+  .legacy-banner .btn { text-decoration: none; white-space: nowrap; }
+  @media (max-width: 520px) { .legacy-banner { margin: 12px 12px 0; flex-wrap: wrap; } }
 </style>
 </head>
 <body>
@@ -196,11 +246,17 @@
   <div class="summary" id="summary"></div>
   <div class="spacer"></div>
   <div class="seg" id="range" title="Chart range"><button data-r="10m"><span class="full">10 min</span><span class="short">10m</span></button><button data-r="1h"><span class="full">60 min</span><span class="short">1h</span></button><button data-r="6h"><span class="full">6 hours</span><span class="short">6h</span></button></div>
-  <button class="btn" id="historyBtn" title="History"><svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg><span class="full">History</span></button>
-  <div class="seg" id="unit" title="Temperature unit"><button data-u="C">°C</button><button data-u="F">°F</button></div>
-  <button class="btn primary" id="addBtn" title="Add device"><span class="full">+ Add device</span><span class="short">+ Add</span></button>
+  <button class="btn view-btn" id="historyBtn" title="History" aria-label="History" aria-pressed="false"><svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg></button>
+  <button class="btn view-btn" id="advBtn" title="Advanced: power, electricity cost and usage totals" aria-label="Advanced" aria-pressed="false"><svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg></button>
+  <button class="btn primary" id="addBtn" title="Add device" aria-label="Add device"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
+  <button class="btn" id="updateBtn" hidden><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg><span class="full" id="updateFull"></span><span class="short" id="updateShort"></span></button>
   <button class="btn" id="settingsBtn" title="Settings" aria-label="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
 </header>
+<div class="legacy-banner" id="legacyBanner" role="status" hidden>
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
+  <span id="legacyText"></span>
+  <a class="btn primary" id="legacyLink" target="_blank" rel="noopener">Download update</a>
+</div>
 <main id="grid"></main>
 <section id="historyView" hidden>
   <div class="hv-bar">
@@ -215,6 +271,22 @@
   <div class="tiles" id="hvTiles"></div>
   <div id="hvCharts"></div>
   <p class="hint">Hover to inspect · drag across a chart to zoom in · double-click to reset. Shaded bands show the peak within each interval.</p>
+</section>
+<section id="advView" hidden>
+  <div class="hv-bar">
+    <a class="btn" href="#/">← Dashboard</a>
+    <h2>Advanced</h2>
+    <div class="spacer"></div>
+    <div class="seg" id="advRange" title="Time range"><button data-r="24h">24 h</button><button data-r="7d">7 days</button><button data-r="30d">30 days</button></div>
+  </div>
+  <h3 class="adv-h">Electricity</h3>
+  <div class="tiles" id="advTiles"></div>
+  <div class="adv-price" id="advPrice"></div>
+  <div class="hv-chart"><h3 id="advChartTitle">Energy per day</h3><div class="legend" id="advLegend"></div><canvas id="advChart"></canvas><div class="tip" id="advTip"></div></div>
+  <div class="adv-wrap"><table class="adv-table" id="advPower"></table></div>
+  <h3 class="adv-h">Usage</h3>
+  <div class="adv-wrap"><table class="adv-table" id="advUsage"></table></div>
+  <p class="hint" id="advNote">Power is estimated "at the wall". NVIDIA GPU power is measured, and CPU power is measured where the device has a sensor (LibreHardwareMonitor on Windows, NVIDIA Grace or RAPL on Linux). Otherwise it's estimated from load. Motherboard, memory, drives, fans and power-supply losses are always estimated. Expect totals within about 20% of a plug-in power meter. Energy is only counted while the hub is running and the device is reporting.</p>
 </section>
 
 
@@ -235,18 +307,21 @@
 <dialog id="settingsDlg">
   <h3>Settings</h3>
   <div class="set-section">
+    <div class="set-row"><div class="set-text"><div class="set-k">Temperature unit</div></div><div class="seg" id="setUnit"><button data-u="C">°C</button><button data-u="F">°F</button></div></div>
+    <div class="set-row wrap"><div class="set-text"><div class="set-k">Electricity price</div><div class="set-v hint" id="setPriceHint"></div></div><div class="set-price"><select id="setRegion" aria-label="Where you live"></select><input id="setRate" type="number" min="0" step="0.001" inputmode="decimal" aria-label="Price per kWh"><select id="setCurrency" aria-label="Currency"></select><span class="hint">per kWh</span></div></div>
+  </div>
+  <div class="set-section app-only">
     <div class="set-row"><div class="set-text"><div class="set-k">This computer</div><div class="set-v" id="setRole"></div></div><button class="btn" id="setChange">Change setup…</button></div>
     <div class="set-row" id="setLinkRow"><div class="set-text"><div class="set-k">Dashboard link</div><div class="set-v mono" id="setLink"></div></div><button class="btn" id="setCopy">Copy</button></div>
     <div class="set-row" id="setFwRow"><div class="set-text"><div class="set-k">Network access</div><div class="set-v hint">Let phones and other computers on your network open this dashboard.</div></div><button class="btn" id="setFw">Allow…</button></div>
   </div>
-  <div class="set-section">
+  <div class="set-section app-only">
     <div class="set-row"><div class="set-text"><div class="set-k">Updates</div><div class="set-v" id="setUpdateText"></div></div><button class="btn" id="setUpdateBtn" hidden></button></div>
     <label class="set-row" for="setAutoUpdate" id="setAutoUpdateRow"><div class="set-text"><div class="set-k">Install updates automatically</div><div class="set-v hint">Updates published to your hub are verified, then installed when you're not using the app.</div></div><input type="checkbox" id="setAutoUpdate" class="switch"></label>
     <label class="set-row" for="setStartup"><div class="set-text"><div class="set-k">Start when I sign in</div><div class="set-v hint">Opens Device Monitor when you sign in, so this computer is always reporting.</div></div><input type="checkbox" id="setStartup" class="switch"></label>
     <label class="set-row" for="setStartMin" id="setStartMinRow" hidden><div class="set-text"><div class="set-k">Start minimized to the tray</div><div class="set-v hint">Monitor in the background without opening the window at sign-in.</div></div><input type="checkbox" id="setStartMin" class="switch"></label>
-    <div class="set-row"><div class="set-text"><div class="set-k">Temperature unit</div></div><div class="seg" id="setUnit"><button data-u="C">°C</button><button data-u="F">°F</button></div></div>
   </div>
-  <div class="dlg-foot"><span class="hint" id="setVersion"></span><span class="spacer"></span><button class="btn" id="setQuit">Quit app</button><button class="btn primary" id="setDone" autofocus>Done</button></div>
+  <div class="dlg-foot"><span class="hint app-only" id="setVersion"></span><span class="spacer"></span><button class="btn app-only" id="setQuit">Quit app</button><button class="btn primary" id="setDone" autofocus>Done</button></div>
 </dialog>
 
 
@@ -581,7 +656,7 @@ function renderGrid() {
   const list = [...devices.values()].sort((a, b) => ((a.order ?? 1e9) - (b.order ?? 1e9)) || (a.name || '').localeCompare(b.name || ''));
   for (const [id, c] of cards) if (!devices.has(id)) { c.el.remove(); cards.delete(id); }
   if (!list.length) {
-    grid.innerHTML = `<div class="empty"><h2>No devices yet</h2><p>Click <b>+ Add device</b> and run the command on each PC you want to monitor.</p></div>`;
+    grid.innerHTML = `<div class="empty"><h2>No devices yet</h2><p>Click the <b>+</b> button (Add device) at the top and run the command on each PC you want to monitor.</p></div>`;
   } else {
     $('.empty', grid)?.remove();
     list.forEach((d, i) => { const c = cards.get(d.id) || createCard(d.id); if (!drag && grid.children[i] !== c.el) grid.insertBefore(c.el, grid.children[i] || null); updateCard(d.id); });
@@ -607,13 +682,15 @@ function connect() {
       const wasOnline = prev?.online;
       devices.set(m.id, m.device);
       if (!prev || !wasOnline) renderGrid(); else updateCard(m.id);
+      advLive();
     }
     else if (m.type === 'device') { devices.set(m.device.id, m.device); renderGrid(); if (!$('#historyView').hidden) renderHvDevices(); }
     else if (m.type === 'removed') { devices.delete(m.id); series.delete(m.id); renderGrid(); if (hv.id === m.id && !$('#historyView').hidden) location.hash = '#/'; }
     else if (m.type === 'update') {
-      latestVersions[m.platform] = m.version; renderGrid();
-      if (appApi?.checkForUpdates) appApi.checkForUpdates();
+      latestVersions[m.platform] = m.version; renderGrid(); checkLegacyApp();
+      if (appApi?.checkForUpdates) appApi.checkForUpdates().then(renderUpdateButton).catch(() => {});
     }
+    else if (m.type === 'energySettings') { energy.saved = m.settings; renderPriceRow(); renderAdv(); }
     else if (m.type === 'order') { for (const [id, o] of Object.entries(m.order)) { const d = devices.get(id); if (d) d.order = o; } renderGrid(); }
     else if (m.type === 'status') {
       let changed = false;
@@ -757,10 +834,20 @@ if (!HV_RANGES[hv.range]) hv.range = '6h';
 
 function route() {
   const m = location.hash.match(/^#\/history\/(.+)$/);
-  if (m) openHistory(decodeURIComponent(m[1])); else closeHistory();
+  if (m) { closeAdvanced(); openHistory(decodeURIComponent(m[1])); }
+  else {
+    closeHistory();
+    if (location.hash === '#/advanced') openAdvanced(); else closeAdvanced();
+  }
+  for (const [btn, view] of [['#historyBtn', '#historyView'], ['#advBtn', '#advView']]) {
+    const on = !$(view).hidden;
+    $(btn).classList.toggle('on', on); $(btn).setAttribute('aria-pressed', on);
+  }
 }
 window.addEventListener('hashchange', route);
+// History and Advanced toggle: a second click goes back to the dashboard.
 $('#historyBtn').addEventListener('click', () => {
+  if (!$('#historyView').hidden) { location.hash = '#/'; return; }
   const first = [...devices.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9))[0];
   location.hash = '#/history/' + encodeURIComponent(hv.id && devices.has(hv.id) ? hv.id : first ? first.id : '');
 });
@@ -983,13 +1070,15 @@ function attachHvEvents(ch) {
 }
 window.addEventListener('resize', () => { if (!$('#historyView').hidden) drawHv(); });
 
-// ---------- app settings (only inside the desktop app) ----------
+// ---------- settings (app rows only inside the desktop app) ----------
 const appApi = window.deviceMonitorApp;
 if (appApi && appApi.getSettings) document.documentElement.classList.add('has-settings');
 
 async function openSettings() {
-  let s;
-  try { s = await appApi.getSettings(); } catch { return; }
+  syncUnit(); renderPriceRow();
+  let s = null;
+  if (appApi?.getSettings) try { s = await appApi.getSettings(); } catch {}
+  if (!s) { $('#settingsDlg').showModal(); return; }   // in a browser: display settings only
   $('#setRole').textContent = s.mode === 'host' ? 'Hosting the dashboard for your devices'
     : s.mode === 'client' ? `Connected to the hub at ${s.hubUrl}` : 'Not set up';
   $('#setLink').textContent = s.shareUrl || '';
@@ -1004,7 +1093,6 @@ async function openSettings() {
   $('#setVersion').textContent = 'Version ' + s.version;
   settingsMode = s.mode;
   renderUpdateRow(s);
-  syncUnit();
   $('#settingsDlg').showModal();
 }
 let settingsMode = null;
@@ -1024,9 +1112,6 @@ $('#setStartup').addEventListener('change', async e => {
   $('#setStartMin').disabled = !e.target.checked;
 });
 $('#setStartMin').addEventListener('change', async e => { e.target.checked = await appApi.setStartMinimized(e.target.checked); });
-$('#setUnit').addEventListener('click', e => {
-  const b = e.target.closest('button'); if (b) $(`#unit button[data-u="${b.dataset.u}"]`).click();
-});
 $('#setChange').addEventListener('click', () => {
   const msg = settingsMode === 'host'
     ? 'Stop hosting the dashboard on this computer?\n\nOther devices that report to it will show as offline until a hub is set up again. You can then choose Host or Connect.'
@@ -1054,6 +1139,19 @@ async function loadLatestVersions() {
     try { const r = await fetch('/api/update/' + p); if (r.ok) latestVersions[p] = (await r.json()).version; } catch {}
   }
   renderGrid();
+  checkLegacyApp();
+}
+
+// Desktop apps older than 1.2.0 have no updater. They still load this page from the hub,
+// so this is the one place that can tell them a new version is out.
+function checkLegacyApp() {
+  const ua = navigator.userAgent;
+  if (!/\bElectron\//.test(ua) || appApi?.installUpdate) return;   // a browser, or an app that updates itself
+  const v = latestVersions[/Windows/.test(ua) ? 'windows' : /Mac OS X/.test(ua) ? 'mac' : ''];
+  if (!v) return;
+  $('#legacyText').textContent = `This copy of Device Monitor is too old to update itself. Install version ${v} once and it will keep itself up to date from then on.`;
+  $('#legacyLink').href = location.origin + '/download';   // old apps open new windows in the browser
+  $('#legacyBanner').hidden = false;
 }
 
 function describeUpdate(u, s) {
@@ -1085,12 +1183,333 @@ $('#setUpdateBtn').addEventListener('click', async () => {
 });
 $('#setAutoUpdate').addEventListener('change', async e => { e.target.checked = await appApi.setAutoUpdate(e.target.checked); });
 
+// Header "Update" button: appears whenever a newer version has been published to the hub.
+let updateStatus = null;
+function renderUpdateButton(u) {
+  if (!u || typeof u !== 'object') return;
+  const b = $('#updateBtn'), st = u.state;
+  if (st === 'checking' && !b.hidden) return;   // periodic re-checks shouldn't make it flicker
+  updateStatus = u;
+  b.hidden = !['downloading', 'ready', 'available', 'installing'].includes(st);
+  if (b.hidden) return;
+  const [full, short, title] =
+      st === 'downloading' ? [`Downloading ${u.version}…`, 'Update…', `Downloading version ${u.version}`]
+    : st === 'installing' ? ['Restarting…', 'Restarting…', `Installing version ${u.version}`]
+    : st === 'ready' ? [`Update to ${u.version}`, 'Update', `Restart Device Monitor to install version ${u.version}`]
+    : [`Update to ${u.version}`, 'Update', `Version ${u.version} is available`];
+  $('#updateFull').textContent = full; $('#updateShort').textContent = short;
+  b.title = title; b.setAttribute('aria-label', title);
+  b.disabled = st === 'downloading' || st === 'installing';
+  if ($('#settingsDlg').open) appApi.getSettings().then(renderUpdateRow).catch(() => {});
+}
+$('#updateBtn').addEventListener('click', async () => {
+  if (updateStatus?.state === 'ready') renderUpdateButton({ ...updateStatus, state: 'installing' });
+  try { renderUpdateButton(await appApi.installUpdate()); } catch {}
+});
+if (appApi?.installUpdate) {
+  appApi.onUpdateStatus?.(renderUpdateButton);   // live progress (apps from 1.2.7 on)
+  appApi.getSettings().then(s => renderUpdateButton(s.update)).catch(() => {});
+}
+
+// ---------- electricity price ----------
+// Typical household rates per kWh in local currency (approximate recent averages). Time-of-use and
+// tiered plans vary a lot, so people can type the rate from their bill instead.
+const PRICE_REGIONS = {
+  'US': ['United States (average)', 'USD', 0.165],
+  'US-AL': ['Alabama', 'USD', 0.152], 'US-AK': ['Alaska', 'USD', 0.249], 'US-AZ': ['Arizona', 'USD', 0.151], 'US-AR': ['Arkansas', 'USD', 0.126],
+  'US-CA': ['California', 'USD', 0.316], 'US-CO': ['Colorado', 'USD', 0.153], 'US-CT': ['Connecticut', 'USD', 0.290], 'US-DE': ['Delaware', 'USD', 0.166],
+  'US-DC': ['District of Columbia', 'USD', 0.183], 'US-FL': ['Florida', 'USD', 0.150], 'US-GA': ['Georgia', 'USD', 0.140], 'US-HI': ['Hawaii', 'USD', 0.415],
+  'US-ID': ['Idaho', 'USD', 0.114], 'US-IL': ['Illinois', 'USD', 0.165], 'US-IN': ['Indiana', 'USD', 0.156], 'US-IA': ['Iowa', 'USD', 0.139],
+  'US-KS': ['Kansas', 'USD', 0.142], 'US-KY': ['Kentucky', 'USD', 0.130], 'US-LA': ['Louisiana', 'USD', 0.122], 'US-ME': ['Maine', 'USD', 0.270],
+  'US-MD': ['Maryland', 'USD', 0.186], 'US-MA': ['Massachusetts', 'USD', 0.303], 'US-MI': ['Michigan', 'USD', 0.193], 'US-MN': ['Minnesota', 'USD', 0.153],
+  'US-MS': ['Mississippi', 'USD', 0.133], 'US-MO': ['Missouri', 'USD', 0.130], 'US-MT': ['Montana', 'USD', 0.134], 'US-NE': ['Nebraska', 'USD', 0.120],
+  'US-NV': ['Nevada', 'USD', 0.153], 'US-NH': ['New Hampshire', 'USD', 0.245], 'US-NJ': ['New Jersey', 'USD', 0.194], 'US-NM': ['New Mexico', 'USD', 0.150],
+  'US-NY': ['New York', 'USD', 0.250], 'US-NC': ['North Carolina', 'USD', 0.139], 'US-ND': ['North Dakota', 'USD', 0.119], 'US-OH': ['Ohio', 'USD', 0.161],
+  'US-OK': ['Oklahoma', 'USD', 0.130], 'US-OR': ['Oregon', 'USD', 0.146], 'US-PA': ['Pennsylvania', 'USD', 0.180], 'US-RI': ['Rhode Island', 'USD', 0.290],
+  'US-SC': ['South Carolina', 'USD', 0.144], 'US-SD': ['South Dakota', 'USD', 0.130], 'US-TN': ['Tennessee', 'USD', 0.129], 'US-TX': ['Texas', 'USD', 0.153],
+  'US-UT': ['Utah', 'USD', 0.122], 'US-VT': ['Vermont', 'USD', 0.226], 'US-VA': ['Virginia', 'USD', 0.149], 'US-WA': ['Washington', 'USD', 0.126],
+  'US-WV': ['West Virginia', 'USD', 0.151], 'US-WI': ['Wisconsin', 'USD', 0.179], 'US-WY': ['Wyoming', 'USD', 0.133],
+  'CA-AB': ['Alberta', 'CAD', 0.25], 'CA-BC': ['British Columbia', 'CAD', 0.12], 'CA-MB': ['Manitoba', 'CAD', 0.11], 'CA-NB': ['New Brunswick', 'CAD', 0.14],
+  'CA-NL': ['Newfoundland and Labrador', 'CAD', 0.15], 'CA-NS': ['Nova Scotia', 'CAD', 0.19], 'CA-ON': ['Ontario', 'CAD', 0.15], 'CA-PE': ['Prince Edward Island', 'CAD', 0.18],
+  'CA-QC': ['Quebec', 'CAD', 0.08], 'CA-SK': ['Saskatchewan', 'CAD', 0.20],
+  'AU': ['Australia', 'AUD', 0.33], 'AT': ['Austria', 'EUR', 0.30], 'BE': ['Belgium', 'EUR', 0.35], 'BR': ['Brazil', 'BRL', 0.85], 'CN': ['China', 'CNY', 0.55],
+  'CZ': ['Czechia', 'CZK', 6.5], 'DK': ['Denmark', 'DKK', 2.6], 'FI': ['Finland', 'EUR', 0.20], 'FR': ['France', 'EUR', 0.25], 'DE': ['Germany', 'EUR', 0.39],
+  'HK': ['Hong Kong', 'HKD', 1.5], 'IN': ['India', 'INR', 8], 'IE': ['Ireland', 'EUR', 0.37], 'IL': ['Israel', 'ILS', 0.65], 'IT': ['Italy', 'EUR', 0.30],
+  'JP': ['Japan', 'JPY', 31], 'MX': ['Mexico', 'MXN', 1.5], 'NL': ['Netherlands', 'EUR', 0.32], 'NZ': ['New Zealand', 'NZD', 0.35], 'NO': ['Norway', 'NOK', 1.4],
+  'PH': ['Philippines', 'PHP', 12], 'PL': ['Poland', 'PLN', 1.0], 'PT': ['Portugal', 'EUR', 0.22], 'SG': ['Singapore', 'SGD', 0.30], 'ZA': ['South Africa', 'ZAR', 3.5],
+  'KR': ['South Korea', 'KRW', 150], 'ES': ['Spain', 'EUR', 0.24], 'SE': ['Sweden', 'SEK', 2.0], 'CH': ['Switzerland', 'CHF', 0.32], 'TW': ['Taiwan', 'TWD', 3.0],
+  'AE': ['United Arab Emirates', 'AED', 0.30], 'GB': ['United Kingdom', 'GBP', 0.25],
+};
+// Time zone -> most likely region. Zones shared by many US states fall back to the US average.
+const TZ_REGIONS = {
+  'America/Los_Angeles': 'US-CA', 'America/Denver': 'US-CO', 'America/Phoenix': 'US-AZ', 'America/Boise': 'US-ID', 'America/Detroit': 'US-MI',
+  'America/Anchorage': 'US-AK', 'America/Juneau': 'US-AK', 'America/Nome': 'US-AK', 'America/Sitka': 'US-AK', 'Pacific/Honolulu': 'US-HI',
+  'America/Toronto': 'CA-ON', 'America/Vancouver': 'CA-BC', 'America/Edmonton': 'CA-AB', 'America/Winnipeg': 'CA-MB', 'America/Regina': 'CA-SK',
+  'America/Halifax': 'CA-NS', 'America/Moncton': 'CA-NB', 'America/St_Johns': 'CA-NL', 'America/Montreal': 'CA-QC',
+  'Europe/London': 'GB', 'Europe/Dublin': 'IE', 'Europe/Berlin': 'DE', 'Europe/Paris': 'FR', 'Europe/Madrid': 'ES', 'Europe/Rome': 'IT',
+  'Europe/Amsterdam': 'NL', 'Europe/Brussels': 'BE', 'Europe/Vienna': 'AT', 'Europe/Zurich': 'CH', 'Europe/Lisbon': 'PT', 'Europe/Warsaw': 'PL',
+  'Europe/Prague': 'CZ', 'Europe/Stockholm': 'SE', 'Europe/Oslo': 'NO', 'Europe/Copenhagen': 'DK', 'Europe/Helsinki': 'FI',
+  'Pacific/Auckland': 'NZ', 'Asia/Tokyo': 'JP', 'Asia/Seoul': 'KR', 'Asia/Singapore': 'SG', 'Asia/Kolkata': 'IN', 'Asia/Calcutta': 'IN',
+  'Asia/Shanghai': 'CN', 'Asia/Hong_Kong': 'HK', 'Asia/Taipei': 'TW', 'America/Sao_Paulo': 'BR', 'America/Mexico_City': 'MX',
+  'Africa/Johannesburg': 'ZA', 'Asia/Dubai': 'AE', 'Asia/Jerusalem': 'IL', 'Asia/Manila': 'PH',
+};
+function guessRegion() {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  const prefix = [['America/Indiana/', 'US-IN'], ['America/Kentucky/', 'US-KY'], ['America/North_Dakota/', 'US-ND'], ['Australia/', 'AU']].find(([p]) => tz.startsWith(p));
+  if (TZ_REGIONS[tz]) return TZ_REGIONS[tz];
+  if (prefix) return prefix[1];
+  const country = (navigator.language || '').split('-')[1]?.toUpperCase();
+  return country && PRICE_REGIONS[country] ? country : 'US';
+}
+
+const energy = { saved: null };   // the hub's saved price (shared by every screen), or null
+function priceSettings() {
+  if (energy.saved) return { ...energy.saved, guessed: false };
+  const region = guessRegion(), [, currency, rate] = PRICE_REGIONS[region];
+  return { region, currency, rate, guessed: true };
+}
+const regionName = code => PRICE_REGIONS[code]?.[0] || 'your area';
+function money(v, cur = priceSettings().currency, frac) {
+  if (v == null || !Number.isFinite(v)) return '–';
+  const f = frac ?? (Math.abs(v) >= 100 ? 0 : 2);
+  try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur, minimumFractionDigits: f, maximumFractionDigits: f }).format(v); }
+  catch { return v.toFixed(f) + ' ' + cur; }
+}
+const fmtPrice = s => money(s.rate, s.currency, s.rate < 1 ? 3 : 2) + '/kWh';
+const fmtW = w => w == null ? '–' : w >= 1000 ? (w / 1000).toFixed(2) + ' kW' : Math.round(w) + ' W';
+const fmtKwh = k => (k == null ? '–' : k < 10 ? k.toFixed(2) : k < 100 ? k.toFixed(1) : Math.round(k).toLocaleString()) + ' kWh';
+
+function priceSource(s) {
+  if (s.guessed) return `Typical home rate for ${regionName(s.region)}, guessed from this device's time zone.`;
+  if (s.region !== 'custom' && PRICE_REGIONS[s.region]?.[2] === s.rate) return `Typical home rate for ${regionName(s.region)}.`;
+  return 'The rate you entered.';
+}
+
+function renderPriceRow() {
+  const s = priceSettings(), sel = $('#setRegion'), cur = $('#setCurrency');
+  if (!sel.options.length) {
+    const groups = [['United States', c => c.startsWith('US')], ['Canada', c => c.startsWith('CA-')], ['Other countries', c => !c.startsWith('US') && !c.startsWith('CA-')]];
+    sel.innerHTML = groups.map(([label, test]) => `<optgroup label="${label}">${Object.keys(PRICE_REGIONS).filter(test)
+      .map(c => `<option value="${c}">${esc(PRICE_REGIONS[c][0])}</option>`).join('')}</optgroup>`).join('') + '<option value="custom">Somewhere else</option>';
+    cur.innerHTML = [...new Set(Object.values(PRICE_REGIONS).map(r => r[1]).concat('EUR', 'USD'))].sort().map(c => `<option>${c}</option>`).join('');
+  }
+  sel.value = s.region; cur.value = s.currency;
+  if (document.activeElement !== $('#setRate')) $('#setRate').value = s.rate;
+  $('#setPriceHint').textContent = priceSource(s) + (s.guessed ? ' Pick your area, or enter the rate from your bill.' : ' Enter the rate from your bill for a better estimate.');
+}
+async function saveEnergySettings(s) {
+  try {
+    const r = await fetch('/api/energy/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) });
+    if (r.ok) energy.saved = await r.json();
+  } catch {}
+  renderPriceRow();
+  if (!$('#advView').hidden) renderAdv();
+}
+$('#setRegion').addEventListener('change', e => {
+  const code = e.target.value, s = priceSettings();
+  if (code === 'custom') saveEnergySettings({ region: 'custom', rate: s.rate, currency: s.currency });
+  else saveEnergySettings({ region: code, currency: PRICE_REGIONS[code][1], rate: PRICE_REGIONS[code][2] });
+});
+$('#setRate').addEventListener('change', e => {
+  const v = parseFloat(e.target.value), s = priceSettings();
+  if (v > 0 && v <= 1000) saveEnergySettings({ region: s.region, rate: v, currency: s.currency }); else renderPriceRow();
+});
+$('#setCurrency').addEventListener('change', e => {
+  const s = priceSettings();
+  saveEnergySettings({ region: 'custom', rate: s.rate, currency: e.target.value });
+});
+fetch('/api/energy/settings').then(r => r.json()).then(s => { energy.saved = s; renderPriceRow(); }).catch(() => renderPriceRow());
+
+// ---------- advanced page: power, cost and usage totals ----------
+const adv = { range: localStorage.getItem('advRange') || '7d', data: null, timer: null, seq: 0, hover: null, live: null };
+if (!['24h', '7d', '30d'].includes(adv.range)) adv.range = '7d';
+const DEVICE_COLORS = ['--cpu', '--gpu', '--mem', '--accent', '--warning', '--serious', '#4fb3bf', '#c97fd0'];
+const cssColor = c => c.startsWith('--') ? `var(${c})` : c;
+
+$('#advBtn').addEventListener('click', () => { location.hash = $('#advView').hidden ? '#/advanced' : '#/'; });
+function openAdvanced() {
+  const wasHidden = $('#advView').hidden;
+  document.body.classList.add('adv-mode');
+  $('#advView').hidden = false;
+  if (wasHidden) window.scrollTo(0, 0);
+  renderPriceRow(); renderAdv(); loadAdv();
+  clearInterval(adv.timer); adv.timer = setInterval(loadAdv, 60e3);
+}
+function closeAdvanced() {
+  if ($('#advView').hidden) return;
+  document.body.classList.remove('adv-mode');
+  $('#advView').hidden = true;
+  clearInterval(adv.timer); adv.timer = null;
+  for (const id of devices.keys()) drawChart(id);
+}
+$('#advRange').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  adv.range = b.dataset.r; localStorage.setItem('advRange', adv.range); adv.data = null; renderAdv(); loadAdv();
+});
+
+// Bucket edges in local time: hours for 24 h, days (midnight to midnight) otherwise.
+function advBounds() {
+  const out = [], end = new Date();
+  if (adv.range === '24h') {
+    end.setMinutes(0, 0, 0); end.setHours(end.getHours() + 1);
+    for (let i = 24; i >= 0; i--) { const d = new Date(end); d.setHours(end.getHours() - i); out.push(d.getTime()); }
+  } else {
+    end.setHours(24, 0, 0, 0);
+    for (let i = adv.range === '30d' ? 30 : 7; i >= 0; i--) { const d = new Date(end); d.setDate(end.getDate() - i); out.push(d.getTime()); }
+  }
+  return out;
+}
+async function loadAdv() {
+  const seq = ++adv.seq;
+  try {
+    const r = await (await fetch('/api/energy?bounds=' + advBounds().join(','))).json();
+    if (seq !== adv.seq) return;
+    adv.data = r; energy.saved = r.settings;
+  } catch { if (seq !== adv.seq) return; }
+  renderPriceRow(); renderAdv();
+}
+// Live "now" figures follow reports, at most once a second.
+function advLive() {
+  if ($('#advView').hidden || adv.live) return;
+  adv.live = setTimeout(() => { adv.live = null; renderAdv(); }, 1000);
+}
+
+function advRows() {
+  const byId = new Map((adv.data?.devices || []).map(s => [s.id, s]));
+  return [...devices.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9))
+    .map((d, i) => ({ d, s: byId.get(d.id), color: DEVICE_COLORS[i % DEVICE_COLORS.length], now: d.online ? d.latest?.powerEst : null }));
+}
+function powerSource(e) {
+  if (!e) return '–';
+  return e.cpuMeasured && e.gpuMeasured ? 'CPU and GPU measured' : e.gpuMeasured ? 'GPU measured, CPU estimated'
+    : e.cpuMeasured ? 'CPU measured, rest estimated' : 'Estimated from load';
+}
+const powerBreakdown = e => e ? `CPU ${Math.round(e.cpu)} W${e.cpuMeasured ? '' : ' (est.)'} · GPU ${Math.round(e.gpu)} W${e.gpuEstimated ? ' (est.)' : ''} · rest of system ~${e.rest} W · power supply losses ~${Math.round(e.losses)} W` : '';
+
+function renderAdv() {
+  if ($('#advView').hidden) return;
+  for (const b of $('#advRange').children) b.classList.toggle('on', b.dataset.r === adv.range);
+  const price = priceSettings(), rows = advRows(), data = adv.data;
+  const bounds = data?.bounds || advBounds(), now = Date.now();
+  const end = Math.min(now, bounds[bounds.length - 1]);
+  const nowW = rows.reduce((a, r) => a + (r.now?.watts || 0), 0);
+  const kwh = rows.reduce((a, r) => a + (r.s?.wh || 0), 0) / 1000;
+  const first = Math.min(...rows.map(r => r.s?.firstData ?? Infinity));
+  const since = Math.max(bounds[0], first);
+  const covered = Number.isFinite(first) ? end - since : 0;
+  const rangeLabel = { '24h': 'last 24 hours', '7d': 'last 7 days', '30d': 'last 30 days' }[adv.range];
+  const partial = Number.isFinite(first) && first > bounds[0] + (bounds[1] - bounds[0]);
+  const sinceLabel = partial ? `since ${new Date(first).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : rangeLabel;
+  const monthKwh = covered >= 3600e3 ? kwh / covered * 30.44 * 86400e3 : nowW * 24 * 30.44 / 1000;
+  const tile = (k, v, s) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+  $('#advTiles').innerHTML = [
+    tile('Drawing now', fmtW(nowW), `${money(nowW / 1000 * 24 * price.rate)} a day at this rate`),
+    tile('Energy used', data ? fmtKwh(kwh) : '…', sinceLabel),
+    tile('Cost', data ? money(kwh * price.rate) : '…', `at ${fmtPrice(price)}`),
+    tile('Per month', data ? money(monthKwh * price.rate) : '…', `≈ ${fmtKwh(monthKwh)} ${covered >= 3600e3 ? 'at the recent average' : 'at the current draw'}`),
+  ].join('');
+  $('#advPrice').innerHTML = `<span>Electricity price <b>${esc(fmtPrice(price))}</b> · ${esc(priceSource(price))}</span><button class="btn" id="advPriceBtn">Change…</button>`;
+
+  // Power table
+  const total = kwh * 1000 || 1;
+  const pRows = rows.filter(r => r.s?.minutes || r.now).map(({ d, s, color, now: e }) => `<tr>
+    <td style="--c:${cssColor(color)}"><i></i>${esc(d.name)}</td>
+    <td${e ? ` title="${esc(powerBreakdown(e))}"` : ' class="muted"'}>${e ? fmtW(e.watts) : 'offline'}</td>
+    <td>${fmtW(s?.stats.power?.avg)}</td><td>${fmtW(s?.stats.power?.peak)}</td>
+    <td>${s ? fmtKwh(s.wh / 1000) : '–'}</td><td>${s ? money(s.wh / 1000 * price.rate) : '–'}</td>
+    <td>${s ? Math.round(s.wh / total * 100) + '%' : ''}<span class="share" style="--c:${cssColor(color)}"><span style="width:${s ? Math.round(s.wh / total * 100) : 0}%"></span></span></td>
+    <td class="src" title="${esc(powerBreakdown(e))}">${powerSource(e || d.latest?.powerEst)}</td></tr>`).join('');
+  $('#advPower').innerHTML = pRows ? `<thead><tr><th>Device</th><th>Now</th><th>Average</th><th>Peak</th><th>Energy</th><th>Cost</th><th>Share</th><th style="text-align:left">Power reading</th></tr></thead>
+    <tbody>${pRows}</tbody><tfoot><tr><td>All devices</td><td>${fmtW(nowW)}</td><td></td><td></td><td>${data ? fmtKwh(kwh) : '…'}</td><td>${data ? money(kwh * price.rate) : '…'}</td><td></td><td></td></tr></tfoot>`
+    : `<tbody><tr><td class="muted" style="font-weight:400">No power data yet.</td></tr></tbody>`;
+
+  // Usage table
+  const span = Math.max(60e3, end - bounds[0]);
+  const st = (s, k, f, which) => { const v = s?.stats[k]?.[which]; return v == null ? '–' : f(v); };
+  const hours = m => m >= 600 ? Math.round(m / 60) + ' h' : (m / 60).toFixed(1) + ' h';
+  const uRows = rows.filter(r => r.s?.minutes).map(({ d, s, color }) => `<tr>
+    <td style="--c:${cssColor(color)}"><i></i>${esc(d.name)}</td>
+    <td>${hours(s.minutes)} <span class="muted">${Math.min(100, Math.round(s.minutes * 60e3 / span * 100))}%</span></td>
+    <td>${st(s, 'cpu', fmtPct, 'avg')} <span class="muted">/ ${st(s, 'cpu', fmtPct, 'peak')}</span></td>
+    <td>${st(s, 'gpu', fmtPct, 'avg')} <span class="muted">/ ${st(s, 'gpu', fmtPct, 'peak')}</span></td>
+    <td>${st(s, 'mem', fmtPct, 'avg')}</td>
+    <td>${st(s, 'cpuTemp', fmtTemp, 'peak')} <span class="muted">/ ${st(s, 'gpuTemp', fmtTemp, 'peak')}</span></td>
+    <td>${fmtBytes(s.bytes.rx)}</td><td>${fmtBytes(s.bytes.tx)}</td><td>${fmtBytes(s.bytes.dr)}</td><td>${fmtBytes(s.bytes.dw)}</td></tr>`).join('');
+  $('#advUsage').innerHTML = uRows ? `<thead><tr><th>Device</th><th>Online</th><th>CPU avg / peak</th><th>GPU avg / peak</th><th>Memory avg</th><th>Peak temp CPU / GPU</th><th>Downloaded</th><th>Uploaded</th><th>Disk read</th><th>Disk written</th></tr></thead><tbody>${uRows}</tbody>`
+    : `<tbody><tr><td class="muted" style="font-weight:400">${data ? 'No data for this time range yet.' : 'Loading…'}</td></tr></tbody>`;
+
+  $('#advChartTitle').textContent = adv.range === '24h' ? 'Energy per hour' : 'Energy per day';
+  $('#advLegend').innerHTML = rows.filter(r => r.s?.wh).map(r => `<span style="--c:${cssColor(r.color)}">${esc(r.d.name)}</span>`).join('');
+  drawAdvChart();
+}
+$('#advPrice').addEventListener('click', e => { if (e.target.closest('#advPriceBtn')) openSettings().then(() => $('#setRegion').focus()); });
+
+function advBucketLabel(i, long) {
+  const b = adv.data.bounds, d = new Date(b[i]);
+  if (adv.range === '24h') return long ? `${d.toLocaleDateString([], { weekday: 'short' })} ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}–${new Date(b[i + 1]).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : d.toLocaleTimeString([], { hour: 'numeric' });
+  return d.toLocaleDateString([], long ? { weekday: 'long', month: 'short', day: 'numeric' } : adv.range === '7d' ? { weekday: 'short', day: 'numeric' } : { month: 'short', day: 'numeric' });
+}
+function drawAdvChart() {
+  const canvas = $('#advChart'), tip = $('#advTip');
+  const css = getComputedStyle(document.documentElement);
+  const dpr = window.devicePixelRatio || 1, W = canvas.clientWidth, H = canvas.clientHeight;
+  if (!W) return;
+  if (canvas.width !== W * dpr || canvas.height !== H * dpr) { canvas.width = W * dpr; canvas.height = H * dpr; }
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
+  tip.style.display = 'none';
+  const data = adv.data; if (!data) return;
+  const rows = advRows().filter(r => r.s?.wh), n = data.bounds.length - 1;
+  const totals = Array.from({ length: n }, (_, i) => rows.reduce((a, r) => a + r.s.buckets[i], 0) / 1000);
+  const yMax = niceMax(Math.max(...totals, 0.001) * 1.1);
+  const L = 58, R = 10, T = 8, B = 22, ch = H - T - B, slot = (W - L - R) / n, bw = Math.max(2, Math.min(48, slot * 0.7));
+  ctx.font = '10px Segoe UI, system-ui, sans-serif'; ctx.textBaseline = 'middle'; ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const py = Math.round(T + ch - ch * i / 4) + 0.5;
+    ctx.strokeStyle = css.getPropertyValue(i === 0 ? '--axis' : '--grid'); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(L, py); ctx.lineTo(W - R, py); ctx.stroke();
+    if (i % 2 === 0) { ctx.fillStyle = css.getPropertyValue('--text-muted'); ctx.fillText(+(yMax * i / 4).toFixed(2) + ' kWh', L - 6, py); }
+  }
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  const every = Math.ceil(n / Math.max(2, Math.floor((W - L) / 70)));
+  for (let i = 0; i < n; i++) {
+    const cx = L + slot * (i + 0.5);
+    if (i % every === 0) { ctx.fillStyle = css.getPropertyValue('--text-muted'); ctx.fillText(advBucketLabel(i), cx, H - B + 6); }
+    let y = T + ch;
+    ctx.globalAlpha = adv.hover == null || adv.hover === i ? 1 : 0.45;
+    for (const r of rows) {
+      const h = r.s.buckets[i] / 1000 / yMax * ch; if (h <= 0) continue;
+      ctx.fillStyle = r.color.startsWith('--') ? css.getPropertyValue(r.color).trim() : r.color;
+      ctx.fillRect(cx - bw / 2, y - h, bw, Math.max(0.5, h - 1)); y -= h;
+    }
+    ctx.globalAlpha = 1;
+  }
+  if (adv.hover != null && adv.hover < n) {
+    const i = adv.hover, price = priceSettings(), soFar = data.bounds[i + 1] > Date.now() ? ' (so far)' : '';
+    tip.innerHTML = `<div class="t">${esc(advBucketLabel(i, true))}${soFar}</div>` + rows.filter(r => r.s.buckets[i] > 0)
+      .map(r => `<div class="row" style="--c:${cssColor(r.color)}">${esc(r.d.name)} <b>${fmtKwh(r.s.buckets[i] / 1000)}</b> <span class="hint">${money(r.s.buckets[i] / 1000 * price.rate)}</span></div>`).join('')
+      + `<div class="row" style="--c:transparent">Total <b>${fmtKwh(totals[i])}</b> <span class="hint">${money(totals[i] * price.rate)}</span></div>`;
+    tip.style.display = 'block';
+    const cx = L + slot * (i + 0.5), tw = tip.offsetWidth;
+    tip.style.left = (cx + 14 + tw > W ? cx - tw - 14 : cx + 14) + 'px';
+  }
+}
+$('#advChart').addEventListener('pointermove', e => {
+  const c = $('#advChart'), n = (adv.data?.bounds.length || 1) - 1, x = e.clientX - c.getBoundingClientRect().left;
+  const i = Math.floor((x - 58) / ((c.clientWidth - 68) / n));
+  const h = i >= 0 && i < n ? i : null;
+  if (h !== adv.hover) { adv.hover = h; drawAdvChart(); }
+});
+$('#advChart').addEventListener('pointerleave', () => { adv.hover = null; drawAdvChart(); });
+window.addEventListener('resize', () => { if (!$('#advView').hidden) drawAdvChart(); });
+
 // ---------- unit toggle ----------
-function syncUnit() { for (const b of document.querySelectorAll('#unit button, #setUnit button')) b.classList.toggle('on', b.dataset.u === unit); }
-$('#unit').addEventListener('click', e => {
+function syncUnit() { for (const b of document.querySelectorAll('#setUnit button')) b.classList.toggle('on', b.dataset.u === unit); }
+$('#setUnit').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   unit = b.dataset.u; localStorage.setItem('unit', unit); syncUnit(); renderGrid();
   if (!$('#historyView').hidden) { renderTiles(); drawHv(); }
+  renderAdv();
 });
 syncUnit();
 window.addEventListener('resize', () => { for (const id of devices.keys()) drawChart(id); });

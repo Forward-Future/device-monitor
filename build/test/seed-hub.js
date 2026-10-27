@@ -20,14 +20,27 @@ for (const d of devs) {
 const { startHub } = require('../../server');
 startHub({ port: 7788, dataDir: dir, rootDir: path.join(__dirname, '../..') }).then(() => {
   console.log('test hub on :7788');
+  const want = {}, results = {};
+  const fakeProcs = d => ['chrome', 'Code', 'python3', 'node', 'explorer', 'Discord', 'obs64', 'svchost', 'MsMpEng', 'steam'].map((name, i) => ({
+    pid: 1000 + i * 37, name, cpu: Math.max(0, 30 / (i + 1) + Math.random() * 3), mem: (12 - i) * 3e8, gpuMem: name === 'python3' ? 20e9 : null, gpu: name === 'python3' ? 88 : null,
+    cmd: name === 'python3' ? 'python3 train.py --epochs 40' : null }));
   const tick = () => {
     for (const d of devs) {
+      if (d.id === 'nas' && d.sent) continue;   // reports once, then goes offline (Wake-on-LAN test)
+      d.sent = true;
       const t = Date.now(), cpu = Math.max(0, wave(t, 3e4, 40, 30));
       fetch('http://127.0.0.1:7788/api/report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
         id: d.id, token, hostname: d.name, platform: 'linux', os: 'Test OS', uptime: 3600,
+        formFactor: d.id === 'mbp' ? 'laptop' : 'desktop', power: d.id === 'dgx' ? { cpu: 85 } : null,
         cpu: { name: 'Test CPU', usage: cpu, cores: [cpu, cpu / 2], temp: 45 + cpu * 0.4 },
-        memory: { total: 64e9, used: 36e9 }, gpus: [{ name: 'Test GPU', usage: 90, temp: 80, power: 500, memUsed: 10e9, memTotal: 48e9 }],
-        disks: [{ name: '/', total: 1e12, used: 4e11 }], net: { rx: 1e5, tx: 5e4 }, diskIO: { read: 1e6, write: 2e6 } }) }).catch(() => {});
+        memory: { total: 64e9, used: 36e9 }, gpus: [{ name: 'Test GPU', usage: 90, temp: 80, power: d.id === 'mbp' ? null : 500, memUsed: 10e9, memTotal: d.id === 'mbp' ? 0 : 48e9 }],
+        disks: [{ name: '/', total: 1e12, used: d.id === 'lab' ? 9.5e11 : 4e11 }], net: { rx: 1e5, tx: 5e4 }, diskIO: { read: 1e6, write: 2e6 },
+        features: ['procs', 'actions'], actions: d.id === 'mbp' ? [] : ['sleep', 'restart', 'shutdown'], macs: ['aa:bb:cc:dd:ee:0' + devs.indexOf(d)],
+        processes: want[d.id] ? fakeProcs(d) : undefined, actionResult: results[d.id] }) })
+        .then(r => r.json()).then(r => {
+          want[d.id] = !!r.procs; results[d.id] = undefined;
+          for (const c of r.commands || []) results[d.id] = { id: c.id, ok: c.action !== 'shutdown', message: c.action === 'shutdown' ? 'Test device refused (fake)' : 'Fake ' + c.action + ' done' };
+        }).catch(() => {});
     }
   };
   tick(); setInterval(tick, 2000);

@@ -4,8 +4,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const FIELDS = ['cpu', 'gpu', 'mem', 'cpuTemp', 'gpuTemp', 'gpuPower', 'rx', 'tx', 'dr', 'dw'];
-const MAX_FIELDS = ['cpu', 'gpu', 'cpuTemp', 'gpuTemp'];   // also keep the peak within each bucket
+const FIELDS = ['cpu', 'gpu', 'mem', 'cpuTemp', 'gpuTemp', 'gpuPower', 'power', 'rx', 'tx', 'dr', 'dw'];
+const MAX_FIELDS = ['cpu', 'gpu', 'cpuTemp', 'gpuTemp', 'power'];   // also keep the peak within each bucket
 const RAW_MS = 60 * 60 * 1000;
 const MINUTE_MS = 60 * 1000;
 const KEEP_MS = 30 * 24 * 60 * 60 * 1000;
@@ -106,6 +106,14 @@ class HistoryStore {
     return (this.raw.get(id) || []).filter(s => s.t >= since);
   }
 
+  // 1-minute points covering [from, to], including the current unfinished minute.
+  minutePoints(id, from, to = Date.now()) {
+    const mins = (this.minutes.get(id) || []).filter(p => p.t >= from && p.t <= to);
+    const lastMin = mins.length ? mins[mins.length - 1].t : -Infinity;
+    const tail = (this.raw.get(id) || []).filter(s => s.t >= lastMin + MINUTE_MS && s.t >= from && s.t <= to);
+    return mins.concat(aggregate(tail, MINUTE_MS, Math.floor(from / MINUTE_MS) * MINUTE_MS));
+  }
+
   // Points covering [from, to], at most ~maxPoints, using raw data when it's fine-grained enough.
   query(id, from, to = Date.now(), maxPoints = 1200) {
     const span = Math.max(1, to - from);
@@ -121,11 +129,7 @@ class HistoryStore {
       resolution = older.length ? MINUTE_MS : Math.max(2000, width);
     } else {
       // Minute data, plus the current unfinished minute from raw so the right edge is live.
-      const mins = (this.minutes.get(id) || []).filter(p => p.t >= from && p.t <= to);
-      const lastMin = mins.length ? mins[mins.length - 1].t : -Infinity;
-      const tail = raw.filter(s => s.t >= lastMin + MINUTE_MS);
-      const tailAgg = aggregate(tail, MINUTE_MS, Math.floor(from / MINUTE_MS) * MINUTE_MS);
-      const all = mins.concat(tailAgg);
+      const all = this.minutePoints(id, from, to);
       points = width <= MINUTE_MS ? all : aggregate(all, width, from);
       resolution = Math.max(MINUTE_MS, width);
     }

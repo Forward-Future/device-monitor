@@ -16,6 +16,7 @@ case "$CPU_NAME" in Neoverse-V2) CPU_NAME="NVIDIA Grace (Neoverse-V2)" ;; esac
 MODEL="$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null)"
 case "$MODEL" in ""|*"To be filled"*|"System Product Name") ;; *) OS="$OS · $MODEL" ;; esac
 THREADS="$(grep -c ^processor /proc/cpuinfo)"
+case "$(cat /sys/class/dmi/id/chassis_type 2>/dev/null)" in 8|9|10|11|14|30|31|32) FORM=laptop ;; *) FORM=desktop ;; esac
 esc() { printf '%s' "$1" | tr -d '"\\' | tr -d '[:cntrl:]'; }  # strip chars that would break JSON
 num() { [[ "$1" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] && echo "$1" || echo null; }
 
@@ -39,6 +40,24 @@ cpu_temp() {
   [ -n "$max" ] && awk -v t="$max" 'BEGIN { printf "%.1f", t/1000 }' || echo null
 }
 
+# CPU power: NVIDIA Grace power meters (instantaneous, microwatts), else Intel/AMD RAPL energy
+# counters (microjoules; often root-only, in which case the hub estimates CPU power from load).
+grace_power() {
+  for h in /sys/class/hwmon/hwmon*; do
+    [ "$(cat "$h/name" 2>/dev/null)" = power_meter ] || continue
+    case "$(cat "$h/power1_oem_info" 2>/dev/null)" in "Grace Power Socket"*) cat "$h/power1_average" 2>/dev/null ;; esac
+  done | awk '{ s+=$1; n++ } END { if (n) printf "%.1f", s/1e6 }'
+}
+read_rapl() {
+  for z in /sys/class/powercap/intel-rapl:[0-9]; do [ -r "$z/energy_uj" ] && echo "$(cat "$z/energy_uj") $(cat "$z/max_energy_range_uj" 2>/dev/null || echo 0)"; done
+}
+cpu_power() {
+  local g; g="$(grace_power)"; [ -n "$g" ] && { echo "$g"; return; }
+  [ -n "$PREV_RAPL" ] && [ -n "$CUR_RAPL" ] && paste -d' ' <(echo "$PREV_RAPL") <(echo "$CUR_RAPL") | awk -v s="$SEC" '
+    { d=$3-$1; if (d<0) d+=$4; t+=d } END { if (s>0 && NR) printf "%.1f", t/1e6/s }'
+}
+PREV_RAPL="$(read_rapl)"
+
 PREV_CPU="$(read_cpu)"; PREV_NET="$(read_net)"; PREV_DISK="$(read_disk)"; PREV_T=$(date +%s.%N)
 sleep "$INTERVAL"
 while true; do
@@ -54,6 +73,7 @@ while true; do
   read PRD PWR <<< "$PREV_DISK"; read RD WR <<< "$CUR_DISK"
   RATES="$(awk -v s="$SEC" -v a="$PRX" -v b="$RX" -v c="$PTX" -v d="$TX" -v e="$PRD" -v f="$RD" -v g="$PWR" -v h="$WR" \
     'BEGIN{ printf "\"net\":{\"rx\":%.0f,\"tx\":%.0f},\"diskIO\":{\"read\":%.0f,\"write\":%.0f}", (b-a)/s, (d-c)/s, (f-e)/s, (h-g)/s }')"
+  CUR_RAPL="$(read_rapl)"; CPU_W="$(cpu_power)"; PREV_RAPL="$CUR_RAPL"
   PREV_CPU="$CUR_CPU"; PREV_NET="$CUR_NET"; PREV_DISK="$CUR_DISK"; PREV_T="$T"
 
   MEM="$(awk '/^MemTotal/ {t=$2} /^MemAvailable/ {a=$2} END { printf "\"total\":%.0f,\"used\":%.0f", t*1024, (t-a)*1024 }' /proc/meminfo)"
@@ -72,10 +92,11 @@ while true; do
     [ -f "$card/device/gpu_busy_percent" ] || continue
     U=$(cat "$card/device/gpu_busy_percent"); MU=$(cat "$card/device/mem_info_vram_used" 2>/dev/null || echo null); MT=$(cat "$card/device/mem_info_vram_total" 2>/dev/null || echo null)
     GT=null; for h in "$card"/device/hwmon/hwmon*/temp1_input; do [ -f "$h" ] && GT=$(awk '{ printf "%.1f", $1/1000 }' "$h"); done
-    GPUS="$GPUS${GPUS:+,}{\"name\":\"AMD GPU\",\"vendor\":\"amd\",\"usage\":$U,\"temp\":$GT,\"memUsed\":$MU,\"memTotal\":$MT}"
+    GP=null; for h in "$card"/device/hwmon/hwmon*/power1_average; do [ -r "$h" ] && GP=$(awk '{ printf "%.1f", $1/1e6 }' "$h"); done
+    GPUS="$GPUS${GPUS:+,}{\"name\":\"AMD GPU\",\"vendor\":\"amd\",\"usage\":$U,\"temp\":$GT,\"memUsed\":$MU,\"memTotal\":$MT,\"power\":$GP}"
   done
 
-  BODY="{\"id\":\"$ID\",\"token\":\"$TOKEN\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"linux\",\"appVersion\":\"$(esc "${DM_APP_VERSION:-}")\",\"os\":\"$(esc "$OS")\",\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$THREADS,\"clockMHz\":$MHZ,\"temp\":$(cpu_temp),$CPU_JSON},\"memory\":{$MEM},\"gpus\":[$GPUS],\"disks\":[$DISKS],$RATES}"
+  BODY="{\"id\":\"$ID\",\"token\":\"$TOKEN\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"linux\",\"appVersion\":\"$(esc "${DM_APP_VERSION:-}")\",\"os\":\"$(esc "$OS")\",\"formFactor\":\"$FORM\",\"power\":{\"cpu\":$(num "$CPU_W")},\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$THREADS,\"clockMHz\":$MHZ,\"temp\":$(cpu_temp),$CPU_JSON},\"memory\":{$MEM},\"gpus\":[$GPUS],\"disks\":[$DISKS],$RATES}"
   curl -fsS -m 5 -X POST -H 'Content-Type: application/json' --data-binary "$BODY" "$HUB/api/report" >/dev/null 2>&1
   sleep "$INTERVAL"
 done

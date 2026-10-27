@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('deviceMonitorApp', {
   checkForUpdates: () => ipcRenderer.invoke('dm:check-updates'),
   setAutoUpdate: on => ipcRenderer.invoke('dm:set-auto-update', !!on),
   installUpdate: () => ipcRenderer.invoke('dm:install-update'),
+  onUpdateStatus: cb => { ipcRenderer.on('dm:update-status', (_e, status) => cb(status)); },
 });
 
 // Lets pages make room for the native window buttons and drag the window by its header.

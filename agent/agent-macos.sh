@@ -22,6 +22,7 @@ OS="macOS $(sw_vers -productVersion 2>/dev/null)"
 [ -n "$MODEL" ] && OS="$OS · $MODEL"
 CPU_NAME="$(sysctl -n machdep.cpu.brand_string 2>/dev/null)"
 THREADS="$(sysctl -n hw.logicalcpu 2>/dev/null)"
+case "$MODEL" in *Book*) FORM=laptop ;; *) FORM=desktop ;; esac
 MEM_TOTAL="$(sysctl -n hw.memsize)"
 BOOT="$(sysctl -n kern.boottime | awk -F'[ ,]+' '{ for (i = 1; i <= NF; i++) if ($i == "sec") { print $(i + 2); exit } }')"
 # Optional temperature sensors: `brew install smctemp` (Apple Silicon + Intel).
@@ -93,7 +94,7 @@ while true; do
   [ -n "$SMCTEMP" ] && CPU_TEMP="$(num "$("$SMCTEMP" -c 2>/dev/null | head -1)")"
   UPTIME=$(( $(date +%s) - ${BOOT:-$(date +%s)} ))
 
-  BODY="{\"id\":\"$(esc "$ID")\",\"token\":\"$TOKEN\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"macos\",\"appVersion\":\"$(esc "${DM_APP_VERSION:-}")\",\"os\":\"$(esc "$OS")\",\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$(num "$THREADS"),\"clockMHz\":null,\"temp\":$CPU_TEMP,\"usage\":$CPU,\"cores\":[]},\"memory\":{\"total\":$MEM_TOTAL,\"used\":$(memory_used)},\"gpus\":[$(gpus_json)],\"disks\":[$(disks_json)],$RATES}"
+  BODY="{\"id\":\"$(esc "$ID")\",\"token\":\"$TOKEN\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"macos\",\"appVersion\":\"$(esc "${DM_APP_VERSION:-}")\",\"os\":\"$(esc "$OS")\",\"formFactor\":\"$FORM\",\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$(num "$THREADS"),\"clockMHz\":null,\"temp\":$CPU_TEMP,\"usage\":$CPU,\"cores\":[]},\"memory\":{\"total\":$MEM_TOTAL,\"used\":$(memory_used)},\"gpus\":[$(gpus_json)],\"disks\":[$(disks_json)],$RATES}"
   curl -fsS -m 5 -X POST -H 'Content-Type: application/json' --data-binary "$BODY" "$HUB/api/report" >/dev/null 2>&1
   sleep $(( INTERVAL > 1 ? INTERVAL - 1 : 1 ))
 done

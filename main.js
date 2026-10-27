@@ -11,6 +11,7 @@ const { startHub, lanAddresses } = require('./server');
 const { startAgent } = require('./agent-runner');
 const { discover, DISCOVERY_PORT } = require('./discovery');
 const { Updater } = require('./updater');
+const tailscale = require('./tailscale');
 
 const PORT = 7777;
 // Dev-only test hooks (screenshots, isolated profiles); ignored in the installed app.
@@ -23,6 +24,7 @@ const TRAY_ICON = path.join(__dirname, 'build', IS_MAC ? 'trayTemplate.png' : 't
 const AGENT_DIR = path.join(__dirname, 'agent').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
 
 let win = null, tray = null, hub = null, agent = null, updater = null, quitting = false;
+let activeHub = null;            // client mode: the hub address in use (home network, or Tailscale when away)
 let installRequested = false;   // "Install now" clicked while automatic updates are off
 const IS_WIN = process.platform === 'win32';
 // Public half of the release key (see build/release.js); without it, updates are disabled.
@@ -57,8 +59,61 @@ async function fetchInfo(hubUrl) {
 }
 
 function dashboardUrl() {
-  return settings.mode === 'host' ? `http://127.0.0.1:${PORT}` : settings.hubUrl;
+  return settings.mode === 'host' ? `http://127.0.0.1:${PORT}` : activeHub || settings.hubUrl;
 }
+
+// ---- Finding the hub from anywhere (client mode) ------------------------------------
+// The address picked at setup (usually the hub's home-network address) comes first. Whenever the
+// hub answers, the app also remembers the hub's Tailscale addresses, so away from home it switches
+// to one of those on its own, and back again once the home address answers. If none were learned
+// yet, it looks for the hub among this computer's Tailscale peers. Only a hub with the same pairing
+// token is ever accepted, so the app can't end up reporting to someone else's hub.
+const hubCandidates = () => [...new Set([settings.hubUrl, ...(settings.altHubUrls || [])].filter(Boolean))];
+async function hubAnswers(url) {
+  try { const info = await fetchInfo(url); return info.token === settings.token ? info : null; } catch { return null; }
+}
+function learnRemote(info) {
+  const urls = (Array.isArray(info?.remote?.urls) ? info.remote.urls : [])
+    .filter(u => { try { return typeof u === 'string' && /^https?:$/.test(new URL(u).protocol) && new URL(u).origin === u.replace(/\/$/, ''); } catch { return false; } })
+    .concat(activeHub && activeHub !== settings.hubUrl ? [activeHub] : [])   // never forget the address that works
+    .filter((u, i, a) => u !== settings.hubUrl && a.indexOf(u) === i).slice(0, 4);
+  if (urls.length && JSON.stringify(urls) !== JSON.stringify(settings.altHubUrls || [])) { settings.altHubUrls = urls; saveSettings(); }
+}
+async function findHub() {
+  for (const url of hubCandidates()) { const info = await hubAnswers(url); if (info) { learnRemote(info); return url; } }
+  const peers = await tailscale.peerUrls().catch(() => []);
+  const found = await Promise.all(peers.map(async url => ((await hubAnswers(url)) ? url : null)));
+  const url = found.find(Boolean);
+  if (url) { settings.altHubUrls = [...new Set([url, ...(settings.altHubUrls || [])])].slice(0, 4); saveSettings(); }
+  return url || null;
+}
+let checkingHub = false;
+async function checkHub() {
+  if (settings.mode !== 'client' || checkingHub) return;
+  checkingHub = true;
+  try {
+    const current = activeHub || settings.hubUrl;
+    if (current !== settings.hubUrl) {
+      const home = await hubAnswers(settings.hubUrl);   // back home: prefer the direct address
+      if (home) { learnRemote(home); return switchHub(settings.hubUrl); }
+    }
+    const info = await hubAnswers(current);
+    if (info) { learnRemote(info); if (offlinePageShown()) loadMain(); return; }
+    const found = await findHub();
+    if (found && found !== current) switchHub(found);
+  } finally { checkingHub = false; }
+}
+function switchHub(url) {
+  console.log('hub address:', url);
+  activeHub = url;
+  if (agent) agent.stop();
+  agent = startAgent({ hub: url, token: settings.token, scriptDir: AGENT_DIR, appVersion: app.getVersion() });
+  buildTrayMenu();
+  loadMain();
+  updater?.check();
+}
+const offlinePageShown = () => !!win && !win.isDestroyed() && win.webContents.getURL().startsWith('file:') && win.webContents.getURL().includes('offline.html');
+setInterval(() => checkHub().catch(() => {}), 20e3);
 
 async function stopServices() {
   if (agent) agent.stop();
@@ -72,7 +127,8 @@ async function startServices() {
     hub = await startHub({ port: PORT, dataDir: path.join(app.getPath('userData'), 'hub'), rootDir: __dirname });
     agent = startAgent({ hub: `http://127.0.0.1:${PORT}`, token: hub.token, scriptDir: AGENT_DIR, appVersion: app.getVersion() });
   } else if (settings.mode === 'client') {
-    agent = startAgent({ hub: settings.hubUrl, token: settings.token, scriptDir: AGENT_DIR, appVersion: app.getVersion() });
+    agent = startAgent({ hub: activeHub || settings.hubUrl, token: settings.token, scriptDir: AGENT_DIR, appVersion: app.getVersion() });
+    setTimeout(() => checkHub().catch(() => {}), 1000);
   }
   buildTrayMenu();
 }
@@ -144,6 +200,8 @@ function createWindow({ show }) {
       settings.trayHintShown = true; saveSettings();
     }
   });
+  // A downloaded update waits while the window is on screen; closing it to the tray lets it install.
+  win.on('hide', () => setTimeout(() => updater?.maybeInstall(), 1500));
   // The window only ever shows the app's own pages or the configured dashboard; anything else
   // (links, redirects, popups) goes to the default browser, and only if it's a web URL.
   win.webContents.setWindowOpenHandler(({ url }) => { openExternalSafe(url); return { action: 'deny' }; });
@@ -151,7 +209,10 @@ function createWindow({ show }) {
   win.webContents.on('will-navigate', guard);
   win.webContents.on('will-redirect', guard);
   win.webContents.on('did-fail-load', (_e, code, _desc, url, isMain) => {
-    if (isMain && code !== -3 && !url.startsWith('file:')) win.loadFile(path.join(__dirname, 'app', 'offline.html'), { query: { hub: settings.hubUrl || '' } });
+    if (isMain && code !== -3 && !url.startsWith('file:')) {
+      win.loadFile(path.join(__dirname, 'app', 'offline.html'), { query: { hub: activeHub || settings.hubUrl || '' } });
+      checkHub().catch(() => {});   // maybe we're away from home: try the hub's other addresses
+    }
   });
   loadMain();
 }
@@ -169,7 +230,7 @@ function showWindow() {
 }
 
 function shareUrl() {
-  if (settings.mode !== 'host') return settings.hubUrl;
+  if (settings.mode !== 'host') return activeHub || settings.hubUrl;
   const lan = lanAddresses().find(a => !/vEthernet|WSL|VirtualBox|VMware/i.test(a.name)) || lanAddresses()[0];
   return `http://${lan ? lan.address : os.hostname()}:${PORT}`;
 }
@@ -181,7 +242,7 @@ function buildTrayMenu() {
     { type: 'separator' },
   ];
   if (settings.mode) {
-    items.push({ label: settings.mode === 'host' ? `Hosting dashboard · ${shareUrl()}` : `Connected to ${settings.hubUrl}`, enabled: false });
+    items.push({ label: settings.mode === 'host' ? `Hosting dashboard · ${shareUrl()}` : `Connected to ${activeHub || settings.hubUrl}`, enabled: false });
     items.push({ label: 'Copy dashboard link', click: () => clipboard.writeText(shareUrl()) });
     if (settings.mode === 'host') items.push({ label: 'Allow access from other devices…', click: () => allowFirewall() });
     items.push({ label: 'Change setup…', click: () => { showWindow(); changeSetup(); } });
@@ -208,6 +269,9 @@ function isTrusted(event) {
   // Main frame only: an iframe on the dashboard must never reach these APIs.
   return !!event.senderFrame && event.senderFrame === event.sender.mainFrame && isAllowedUrl(event.senderFrame.url);
 }
+function sendToPage(channel, data) {
+  if (win && !win.isDestroyed() && isAllowedUrl(win.webContents.getURL())) win.webContents.send(channel, data);
+}
 function openExternalSafe(url) {
   try { const u = new URL(url); if (u.protocol === 'http:' || u.protocol === 'https:') shell.openExternal(u.href); } catch {}
 }
@@ -225,7 +289,7 @@ handle('dm:discover', () => discover(1500), { localOnly: true });
 handle('dm:setup', async (_e, { mode, hubUrl } = {}) => {
   try {
     if (mode === 'host') {
-      settings = { ...settings, mode: 'host', hubUrl: null, token: null };
+      settings = { ...settings, mode: 'host', hubUrl: null, token: null, altHubUrls: [] }; activeHub = null;
       await allowFirewall(); // before listening, so Windows doesn't show its own (blocking) prompt
       try { await startServices(); } catch (e) {
         settings.mode = null;
@@ -241,7 +305,8 @@ handle('dm:setup', async (_e, { mode, hubUrl } = {}) => {
       if (!url) return { ok: false, error: 'Enter the hub address, e.g. 192.168.1.20' };
       let info;
       try { info = await fetchInfo(url); } catch (e) { return { ok: false, error: `Couldn't reach a hub at ${url} (${e.message}). Check the address and that the hub PC is on.` }; }
-      settings = { ...settings, mode: 'client', hubUrl: url, token: info.token };
+      settings = { ...settings, mode: 'client', hubUrl: url, token: info.token, altHubUrls: [] }; activeHub = null;
+      learnRemote(info);
       await startServices();
     }
     saveSettings();
@@ -256,7 +321,7 @@ handle('dm:setup', async (_e, { mode, hubUrl } = {}) => {
 handle('dm:retry', () => loadMain(), { localOnly: true });
 handle('dm:change-setup', () => changeSetup());
 handle('dm:settings', () => ({
-  mode: settings.mode, hubUrl: settings.hubUrl, shareUrl: settings.mode ? shareUrl() : null,
+  mode: settings.mode, hubUrl: activeHub || settings.hubUrl, shareUrl: settings.mode ? shareUrl() : null,
   version: app.getVersion(), platform: process.platform,
   startup: startupEnabled(), canSetStartup: app.isPackaged,
   startMinimized: settings.startMinimized === true, canStartMinimized: app.isPackaged && IS_WIN,
@@ -309,12 +374,15 @@ if (!app.requestSingleInstanceLock()) {
     let notifiedVersion = null;
     updater = new Updater({
       app, publicKeyPem: UPDATE_KEY, dir: path.join(app.getPath('userData'), 'updates'),
-      hubUrl: () => (settings.mode === 'host' ? `http://127.0.0.1:${PORT}` : settings.mode === 'client' ? settings.hubUrl : null),
+      hubUrl: () => (settings.mode === 'host' ? `http://127.0.0.1:${PORT}` : settings.mode === 'client' ? activeHub || settings.hubUrl : null),
       canInstall: () => app.isPackaged && IS_WIN && (settings.autoUpdate !== false || installRequested),
-      isBusy: () => !!win && win.isVisible() && !win.isMinimized() && win.isFocused(),
+      // While the window is on screen the dashboard shows an Update button instead of restarting
+      // under the user (the updater still installs on its own after an hour).
+      isBusy: () => !!win && win.isVisible() && !win.isMinimized(),
       isVisible: () => !!win && win.isVisible() && !win.isMinimized(),
       onStatus: st => {
         buildTrayMenu();
+        sendToPage('dm:update-status', st);
         if (st.state === 'available' && st.version !== notifiedVersion && Notification.isSupported()) {
           notifiedVersion = st.version;
           const n = new Notification({ title: `Device Monitor ${st.version} is available`, body: 'Click to download it from your hub.', icon: ICON });

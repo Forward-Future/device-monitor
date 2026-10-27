@@ -30,6 +30,14 @@ The tray menu has the same options.
 - **Reorder** cards by dragging the ⋮⋮ grip. The order is saved on the hub, so it's the same on every screen.
 - **Chart range**: 10 min / 60 min / 6 h in the header.
 - **History**: the History button, a card's ⋯ menu, or clicking a card's chart. Pick 1 h to 30 days, hover to inspect, drag across a chart to zoom, double-click to reset. History is stored on the hub (2-second samples for the last hour, 1-minute averages for 30 days).
+- **Advanced**: electricity use and cost for each device and in total over 24 hours, 7 days or 30 days. It shows what each device is drawing now, an hour-by-hour or day-by-day energy chart, and a projected monthly cost. It also has usage totals: time online, average and peak load, peak temperatures, data downloaded and uploaded, and disk reads and writes.
+- **⚙ Settings** (in the app and in a browser): °C or °F, and your electricity price. The price starts as a typical home rate for where you are, guessed from your time zone. Pick your state or country, or type the rate from your bill. The price is saved on the hub, so every screen uses it.
+
+Power is an estimate of what each device draws from the wall:
+- **Measured:** NVIDIA GPU power, and CPU power where there's a sensor (LibreHardwareMonitor on Windows, NVIDIA Grace or RAPL on Linux).
+- **Estimated:** an unmeasured CPU (from its load), plus the rest of the system and power-supply losses.
+
+Expect it to be within about 20% of a plug-in power meter.
 
 ## Pushing updates to all your devices
 
@@ -43,12 +51,13 @@ npm run release -- --version 1.4.0   # or choose the version
 The hub tells every connected app right away. Each app:
 1. downloads the installer
 2. checks the signature and SHA-256
-3. installs silently once you're not using it (at most an hour later)
-4. restarts in the background
+3. shows an **Update to x.y.z** button in the header while the window is open. Click it to restart into the new version now
+4. otherwise installs on its own as soon as the window is closed to the tray (or after an hour), and restarts in the background
 
 Progress for each device is in **Settings → Updates**, and each card shows its app version (e.g. `v1.2.3 → 1.2.4` while an update is pending).
 
 - **The release key.** The first `npm run release` creates a signing key at `~/.device-monitor/release-key.pem`. It is not in the repo. **Back it up.** Apps only accept updates signed with it. The public half is `build/update-key.pub.pem` and is built into the app.
+- **Apps older than 1.2.0** have no updater. Their dashboard shows a notice with a download button, so they need one manual install.
 - **Macs** can't install updates themselves without an Apple Developer ID, so they show an "update available" notification that opens the download page.
 - **Agents installed with the one-line command** (e.g. on Linux servers) aren't the app, so they don't update this way. Re-run the one-liner to refresh them.
 
@@ -117,6 +126,7 @@ npm run hub        # headless hub only (e.g. on a home server), dashboard at :77
 | `security.js` | Input validation, Host checks (anti DNS-rebinding), CSP headers |
 | `updater.js`, `build/release.js` | Signed self-updates from the hub; the release command |
 | `history.js` | Metric history (raw last hour + 1-minute averages for 30 days, on disk) |
+| `power.js` | Power estimates (watts at the wall) used for electricity use and cost |
 | `agent-runner.js`, `agent/` | Metric agents (Windows PowerShell, macOS and Linux bash) and their one-line installers |
 | `build/test/` | Test fixtures: seeded test hub, macOS command mocks for the Mac agent |
 | `public/index.html` | Dashboard UI |

@@ -63,6 +63,7 @@ class Updater {
   async _check() {
     const base = this.hubUrl();
     const current = this.app.getVersion();
+    const ready = this.status.state === 'ready' ? { ...this.status } : null;
     try {
       if (this.status.state !== 'ready') this.set({ state: 'checking', message: null });
       const res = await fetch(`${base}/api/update/${PLATFORM}`, { signal: AbortSignal.timeout(8000) });
@@ -87,7 +88,9 @@ class Updater {
       this.maybeInstall();
     } catch (e) {
       this.log('update check failed:', e.message);
-      this.set({ state: 'error', message: e.message, lastCheck: Date.now() });
+      // A failed re-check (e.g. the hub is restarting) doesn't throw away an update that's already verified.
+      if (ready) this.set({ ...ready, lastCheck: Date.now() });
+      else this.set({ state: 'error', message: e.message, lastCheck: Date.now() });
     }
     return this.status;
   }
