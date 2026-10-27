@@ -207,6 +207,8 @@
   header .view-btn { width: 34px; padding: 0; justify-content: center; background: none; border-color: transparent; color: var(--text-muted); }
   header .view-btn:hover { color: var(--text-primary); background: var(--surface-2); }
   header #addBtn { width: 34px; padding: 0; justify-content: center; }
+  .pair { display: flex; align-items: baseline; gap: 12px; margin-top: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; }
+  .pair b { font-size: 22px; letter-spacing: .12em; font-variant-numeric: tabular-nums; }
   header .view-btn.on { color: var(--accent); background: rgba(144,133,233,0.14); border-color: rgba(144,133,233,0.45); }
   /* ---------- settings (app-only rows are hidden in a browser) ---------- */
   #settingsBtn { display: inline-flex; background: none; border-color: transparent; color: var(--text-muted); padding: 7px; }
@@ -303,8 +305,9 @@
   <div class="tabs seg" id="osTabs"><button data-os="win" class="on">Windows command</button><button data-os="app">Desktop app (Windows / Mac)</button><button data-os="linux">Mac / Linux command</button></div>
   <div class="cmd" id="cmdRow"><code id="cmd"></code><button class="btn" id="copyBtn">Copy</button></div>
   <div class="hint" id="cmdHint"></div>
+  <div class="pair" id="pairRow" hidden><span class="hint">Pairing code</span><b id="pairCode">––– –––</b><span class="hint" id="pairHint"></span></div>
   <h3 style="margin-top:22px">View from another device</h3>
-  <p style="margin-bottom:8px">Open this address on any phone, tablet or computer on the same network:</p>
+  <p style="margin-bottom:8px">Open this link on any phone, tablet or computer on your network. It includes the dashboard's access key, so only share it with your own devices.</p>
   <div class="cmd"><code id="viewUrl"></code><button class="btn" id="copyView">Copy</button></div>
   <div class="dlg-foot"><button class="btn" id="addDone">Done</button></div>
 </dialog>
@@ -316,8 +319,8 @@
   </div>
   <div class="set-section app-only">
     <div class="set-row"><div class="set-text"><div class="set-k">This computer</div><div class="set-v" id="setRole"></div></div><button class="btn" id="setChange">Change setup…</button></div>
-    <div class="set-row" id="setLinkRow"><div class="set-text"><div class="set-k">Dashboard link</div><div class="set-v mono" id="setLink"></div></div><button class="btn" id="setCopy">Copy</button></div>
-    <div class="set-row" id="setFwRow"><div class="set-text"><div class="set-k">Network access</div><div class="set-v hint">Let phones and other computers on your network open this dashboard.</div></div><button class="btn" id="setFw">Allow…</button></div>
+    <div class="set-row" id="setLinkRow"><div class="set-text"><div class="set-k">Dashboard link</div><div class="set-v mono" id="setLink"></div><div class="set-v hint">Copy includes the access key: open it once on a phone or browser to unlock the dashboard there.</div></div><button class="btn" id="setCopy">Copy</button></div>
+    <div class="set-row" id="setFwRow"><div class="set-text"><div class="set-k">Network access</div><div class="set-v hint" id="setFwHint">Let phones and other computers on your network open this dashboard.</div></div><button class="btn" id="setFw">Allow…</button></div>
   </div>
   <div class="set-section app-only">
     <div class="set-row"><div class="set-text"><div class="set-k">Updates</div><div class="set-v" id="setUpdateText"></div></div><button class="btn" id="setUpdateBtn" hidden></button></div>
@@ -708,6 +711,7 @@ function connect() {
       latestVersions[m.platform] = m.version; renderGrid(); checkLegacyApp();
       if (appApi?.checkForUpdates) appApi.checkForUpdates().then(renderUpdateButton).catch(() => {});
     }
+    else if (m.type === 'paired') { if ($('#addDlg').open && osTab === 'app') showPairCode(); }
     else if (m.type === 'energySettings') { energy.saved = m.settings; renderPriceRow(); renderAdv(); }
     else if (m.type === 'order') { for (const [id, o] of Object.entries(m.order)) { const d = devices.get(id); if (d) d.order = o; } renderGrid(); }
     else if (m.type === 'status') {
@@ -717,7 +721,10 @@ function connect() {
       for (const id of devices.keys()) drawChart(id);  // keep the time axis sliding
     }
   };
-  es.onerror = () => { $('#summary').textContent = 'Reconnecting to hub…'; };
+  es.onerror = () => {
+    $('#summary').textContent = 'Reconnecting to hub…';
+    fetch('/api/info').then(r => r.json()).then(i => { if (i.locked) location.reload(); }).catch(() => {});
+  };
 }
 
 // ---------- menu ----------
@@ -761,15 +768,27 @@ function updateCmd() {
     ? `irm "${hub}/install.ps1?token=${t}" | iex`
     : `curl -fsSL "${hub}/install.sh?token=${t}" | bash`;
   $('#cmdRow').style.display = osTab === 'app' ? 'none' : '';
+  $('#pairRow').hidden = osTab !== 'app';
+  $('#viewUrl').textContent = `${hub}/?key=${t}`;
   if (osTab === 'app') {
-    $('#cmdHint').innerHTML = 'On the other computer, open <a href="' + hub + '/download" target="_blank" style="color:var(--accent)">' + esc(hub) + '/download</a> to install the <b>Device Monitor</b> app, then open it and choose <b>Connect to a hub</b>. It finds this hub automatically, or enter <b>' + esc(hub.replace('http://', '')) + '</b>. That computer then shows up here and can view the dashboard too.';
-    $('#viewUrl').textContent = hub;
+    $('#cmdHint').innerHTML = 'On the other computer, open <a href="' + esc(hub) + '/download" target="_blank" style="color:var(--accent)">' + esc(hub) + '/download</a> to install the <b>Device Monitor</b> app, then open it and choose <b>Connect to a hub</b>. It finds this hub automatically, or enter <b>' + esc(hub.replace('http://', '')) + '</b>, then type the pairing code below. That computer then shows up here and can view the dashboard too.';
+    showPairCode();
     return;
   }
   $('#cmdHint').textContent = osTab === 'win'
     ? 'Lightweight background agent, nothing to install, no admin needed. Paste into PowerShell on the other PC (Win+X → Terminal). Uninstall later with: irm ' + hub + '/uninstall.ps1 | iex'
     : 'Paste into Terminal on the Mac or Linux machine. No sudo needed; it runs in the background and starts at login. Uninstall later with: curl -fsSL ' + hub + '/uninstall.sh | bash';
-  $('#viewUrl').textContent = hub;
+}
+// One-time code a desktop app types to join this hub (valid 10 minutes).
+let pairTimer = null;
+async function showPairCode() {
+  clearTimeout(pairTimer);
+  try {
+    const r = await (await fetch('/api/pair/code', { method: 'POST' })).json();
+    $('#pairCode').textContent = r.code.slice(0, 3) + ' ' + r.code.slice(3);
+    $('#pairHint').textContent = 'one-time · valid 10 minutes';
+    pairTimer = setTimeout(() => { if ($('#addDlg').open && osTab === 'app') showPairCode(); }, r.expires - Date.now() - 5000);
+  } catch { $('#pairCode').textContent = '––– –––'; $('#pairHint').textContent = "Couldn't get a code from the hub."; }
 }
 $('#addBtn').addEventListener('click', async () => {
   info = await (await fetch('/api/info')).json();
@@ -780,6 +799,7 @@ $('#addBtn').addEventListener('click', async () => {
 });
 $('#hubSel').addEventListener('change', updateCmd);
 $('#addDone').addEventListener('click', () => $('#addDlg').close());
+$('#addDlg').addEventListener('close', () => clearTimeout(pairTimer));
 $('#osTabs').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   osTab = b.dataset.os;
@@ -1102,7 +1122,8 @@ async function openSettings() {
   $('#setLink').textContent = s.shareUrl || '';
   $('#setLinkRow').hidden = !s.shareUrl;
   $('#setFwRow').hidden = !s.canAllowFirewall;
-  $('#setFw').textContent = 'Allow…'; $('#setFw').disabled = false;
+  renderFirewall(null);
+  if (s.canAllowFirewall && appApi.firewallStatus) appApi.firewallStatus().then(renderFirewall, () => {});
   $('#setStartup').checked = !!s.startup;
   $('#setStartup').disabled = !s.canSetStartup;
   $('#setStartMinRow').hidden = !s.canStartMinimized;   // older apps don't report it
@@ -1120,10 +1141,22 @@ $('#setCopy').addEventListener('click', async e => {
   await appApi.copyLink();
   e.currentTarget.textContent = 'Copied'; setTimeout(() => { $('#setCopy').textContent = 'Copy'; }, 1500);
 });
+const FW_TEXT = {
+  ok: ['Devices on your local network can reach the dashboard (they still need the dashboard link). Nothing else is let in.', 'Allowed ✓'],
+  open: ['Windows is letting in more than needed: every port, from any network. Fix limits it to the dashboard, from your local network only.', 'Fix…'],
+  missing: ['Let phones and other computers on your network open this dashboard. Not needed for Tailscale.', 'Allow…'],
+};
+function renderFirewall(state) {
+  const [hint, label] = FW_TEXT[state] || FW_TEXT.missing;
+  $('#setFwHint').textContent = state ? hint : 'Checking…';
+  $('#setFw').textContent = state ? label : 'Allow…';
+  $('#setFw').disabled = state === 'ok';
+}
 $('#setFw').addEventListener('click', async () => {
   const b = $('#setFw'); b.disabled = true; b.textContent = 'Approve the Windows prompt…';
   const ok = await appApi.allowFirewall();
-  b.textContent = ok ? 'Allowed ✓' : 'Not changed'; b.disabled = false;
+  if (!ok) { b.textContent = 'Not changed'; b.disabled = false; return; }
+  renderFirewall(appApi.firewallStatus ? await appApi.firewallStatus() : 'ok');
 });
 $('#setStartup').addEventListener('change', async e => {
   e.target.checked = await appApi.setStartup(e.target.checked);

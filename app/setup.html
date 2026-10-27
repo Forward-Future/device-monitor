@@ -66,7 +66,8 @@
       <p>Adds this PC to an existing dashboard and lets you view it here.</p>
       <div class="found" id="found"><span class="busy" id="scan">Looking for hubs on your network…</span></div>
       <div class="row"><input id="addr" placeholder="Hub address, e.g. 192.168.1.20" spellcheck="false"><button class="primary" id="connectBtn">Connect</button></div>
-      <div class="hint">The address is shown in the hub's tray menu and in its “+ Add device” dialog.</div>
+      <div class="row" id="codeRow" hidden><input id="code" placeholder="Pairing code, e.g. 123 456" inputmode="numeric" autocomplete="one-time-code" spellcheck="false"></div>
+      <div class="hint">The address and a pairing code are shown on the hub: click <b>+</b> (Add device) → Desktop app. You can also paste the hub's dashboard link.</div>
     </section>
   </div>
   <p class="error" id="err"></p>

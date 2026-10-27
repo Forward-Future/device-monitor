@@ -5,9 +5,10 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, clipboard, 
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 const { execFile } = require('child_process');
 const { fileURLToPath } = require('url');
-const { startHub, lanAddresses } = require('./server');
+const { startHub, lanAddresses, hubProof } = require('./server');
 const { startAgent } = require('./agent-runner');
 const { discover, DISCOVERY_PORT } = require('./discovery');
 const { Updater } = require('./updater');
@@ -50,12 +51,28 @@ function normalizeHubUrl(input) {
   return u.origin;
 }
 
-async function fetchInfo(hubUrl) {
-  const res = await fetch(hubUrl + '/api/info', { signal: AbortSignal.timeout(4000) });
+// With the hub's key the reply includes the key itself (proof it's the same hub) and its addresses.
+async function fetchInfo(hubUrl, token, nonce) {
+  const res = await fetch(hubUrl + '/api/info' + (nonce ? '?nonce=' + nonce : ''), { signal: AbortSignal.timeout(4000), headers: token ? { Authorization: 'Bearer ' + token } : {} });
   if (!res.ok) throw new Error('HTTP ' + res.status);
   const info = await res.json();
-  if (!info.token) throw new Error('not a Device Monitor hub');
+  if (!info.token && info.app !== 'device-monitor') throw new Error('not a Device Monitor hub');
   return info;
+}
+
+// Joins a hub with the one-time code from its Add device dialog; returns the hub's key.
+async function pairWithHub(hubUrl, code) {
+  const res = await fetch(hubUrl + '/api/pair', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }), signal: AbortSignal.timeout(6000),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || typeof body.token !== 'string') throw new Error(body.error || 'HTTP ' + res.status);
+  return body.token;
+}
+
+// A dashboard link (http://hub:7777/?key=…) carries the hub's key.
+function keyFromLink(input) {
+  try { return new URL(/^https?:\/\//i.test(input) ? input : 'http://' + input).searchParams.get('key') || null; } catch { return null; }
 }
 
 function dashboardUrl() {
@@ -69,8 +86,17 @@ function dashboardUrl() {
 // yet, it looks for the hub among this computer's Tailscale peers. Only a hub with the same pairing
 // token is ever accepted, so the app can't end up reporting to someone else's hub.
 const hubCandidates = () => [...new Set([settings.hubUrl, ...(settings.altHubUrls || [])].filter(Boolean))];
+// The key is only sent once the hub has proven it knows it (an HMAC of a random challenge), so
+// probing Tailscale peers or a stale address never hands the key to some other server.
 async function hubAnswers(url) {
-  try { const info = await fetchInfo(url); return info.token === settings.token ? info : null; } catch { return null; }
+  try {
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const first = await fetchInfo(`${url}`, null, nonce);
+    if (first.token) return first.token === settings.token ? first : null;   // hubs before 1.2.16
+    if (!settings.token || first.proof !== hubProof(settings.token, nonce)) return null;
+    const info = await fetchInfo(url, settings.token);
+    return info.token === settings.token ? info : null;
+  } catch { return null; }
 }
 function learnRemote(info) {
   const urls = (Array.isArray(info?.remote?.urls) ? info.remote.urls : [])
@@ -133,18 +159,25 @@ async function startServices() {
   buildTrayMenu();
 }
 
-// One elevated prompt: allow inbound connections to this app (dashboard + discovery) on private networks.
+// One elevated prompt: let devices on the local network reach this app's dashboard and discovery.
+// Remote access over Tailscale doesn't need this (Tailscale hands those connections to the app locally).
+const psQuote = s => String(s).replace(/'/g, "''");
+// Rules Windows creates from its own "allow this app" prompt let every port in, from any address.
+const appRules = exe => `(Get-NetFirewallApplicationFilter | Where-Object { $_.Program -ieq '${psQuote(exe)}' } | Get-NetFirewallRule | Where-Object { $_.DisplayName -ne 'Device Monitor' -and $_.Direction -eq 'Inbound' })`;
 function allowFirewall() {
   if (process.platform !== 'win32') return Promise.resolve(true); // macOS prompts by itself when needed
+  if (settings.mode !== 'host') return Promise.resolve(false);    // only the hub accepts connections
   // The elevated command is passed inline (-EncodedCommand), not via a temp file that other
   // software could swap out between writing it and the user approving the UAC prompt.
-  const exe = process.execPath.replace(/'/g, "''");
+  const exe = psQuote(process.execPath);
   const elevated = [
     "try {",
     "  Get-NetFirewallRule -DisplayName 'Device Monitor' -ErrorAction SilentlyContinue | Remove-NetFirewallRule",
-    // Only what the hub needs, only on private networks: the dashboard/API port and LAN discovery.
-    `  New-NetFirewallRule -DisplayName 'Device Monitor' -Direction Inbound -Action Allow -Program '${exe}' -Protocol TCP -LocalPort ${PORT} -Profile Private | Out-Null`,
-    `  New-NetFirewallRule -DisplayName 'Device Monitor' -Direction Inbound -Action Allow -Program '${exe}' -Protocol UDP -LocalPort ${DISCOVERY_PORT} -Profile Private | Out-Null`,
+    `  ${appRules(process.execPath)} | Remove-NetFirewallRule`,
+    // Only the dashboard/API port and LAN discovery, only from the local subnet. Every profile,
+    // because home networks are often marked Public; the hub also refuses non-local addresses.
+    `  New-NetFirewallRule -DisplayName 'Device Monitor' -Direction Inbound -Action Allow -Program '${exe}' -Protocol TCP -LocalPort ${PORT} -RemoteAddress LocalSubnet -Profile Any | Out-Null`,
+    `  New-NetFirewallRule -DisplayName 'Device Monitor' -Direction Inbound -Action Allow -Program '${exe}' -Protocol UDP -LocalPort ${DISCOVERY_PORT} -RemoteAddress LocalSubnet -Profile Any | Out-Null`,
     "  exit 0",
     "} catch { exit 1 }",
   ].join("\n");
@@ -154,6 +187,18 @@ function allowFirewall() {
       `try { $p = Start-Process powershell.exe -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','${encoded}'; if ($p.ExitCode -eq 0) { 'ok' } else { 'failed' } } catch { 'denied' }`],
       { windowsHide: true }, (err, stdout) => resolve(!err && String(stdout).trim() === 'ok'));
   });
+}
+// 'ok': just our two local-network rules · 'open': Windows' own rules let more in · 'missing'
+function firewallStatus() {
+  if (!IS_WIN || settings.mode !== 'host') return Promise.resolve(null);
+  const ps = [
+    "$r = @(Get-NetFirewallRule -DisplayName 'Device Monitor' -ErrorAction SilentlyContinue | Where-Object { $_.Enabled -eq 'True' -and $_.Action -eq 'Allow' })",
+    "$ours = $r.Count -ge 2 -and -not ($r | Where-Object { \"$($_.Profile)\" -ne 'Any' -or ((($_ | Get-NetFirewallAddressFilter).RemoteAddress) -join ',') -ne 'LocalSubnet' })",
+    `$open = @(${appRules(process.execPath)} | Where-Object { $_.Enabled -eq 'True' -and $_.Action -eq 'Allow' }).Count`,
+    "if ($open) { 'open' } elseif ($ours) { 'ok' } else { 'missing' }",
+  ].join('; ');
+  return new Promise(resolve => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 30e3 },
+    (err, out) => resolve(err ? null : String(out).trim())));
 }
 
 // Sign-in launches pass --startup (the window opens unless "start minimized" is on);
@@ -219,8 +264,15 @@ function createWindow({ show }) {
 
 function loadMain() {
   if (!win) return;
-  if (!settings.mode) win.loadFile(path.join(__dirname, 'app', 'setup.html'));
-  else win.loadURL(dashboardUrl());
+  if (!settings.mode) return win.loadFile(path.join(__dirname, 'app', 'setup.html'));
+  const url = dashboardUrl();
+  const go = () => { if (win && !win.isDestroyed()) win.loadURL(url); };
+  if (settings.mode !== 'client' || !settings.token) return go();   // the hub PC itself needs no key
+  // The hub only shows its dashboard with its key: hand it over as a cookie for that address.
+  session.defaultSession.cookies.set({
+    url, name: 'dm_key', value: settings.token, httpOnly: true, sameSite: 'strict', secure: url.startsWith('https:'),
+    expirationDate: Math.floor(Date.now() / 1000) + 400 * 86400,
+  }).then(go, go);
 }
 
 function showWindow() {
@@ -234,6 +286,13 @@ function shareUrl() {
   const lan = lanAddresses().find(a => !/vEthernet|WSL|VirtualBox|VMware/i.test(a.name)) || lanAddresses()[0];
   return `http://${lan ? lan.address : os.hostname()}:${PORT}`;
 }
+// The link to give phones and other browsers: it carries the hub's key, which the hub then keeps
+// in a cookie on that device.
+function dashboardLink() {
+  const key = settings.mode === 'host' ? hub?.token : settings.token;
+  const u = shareUrl();
+  return u && key ? `${u}/?key=${key}` : u;
+}
 
 function buildTrayMenu() {
   if (!tray) return;
@@ -243,7 +302,7 @@ function buildTrayMenu() {
   ];
   if (settings.mode) {
     items.push({ label: settings.mode === 'host' ? `Hosting dashboard · ${shareUrl()}` : `Connected to ${activeHub || settings.hubUrl}`, enabled: false });
-    items.push({ label: 'Copy dashboard link', click: () => clipboard.writeText(shareUrl()) });
+    items.push({ label: 'Copy dashboard link', click: () => clipboard.writeText(dashboardLink()) });
     if (settings.mode === 'host') items.push({ label: 'Allow access from other devices…', click: () => allowFirewall() });
     items.push({ label: 'Change setup…', click: () => { showWindow(); changeSetup(); } });
     items.push({ type: 'separator' });
@@ -286,7 +345,7 @@ function handle(channel, fn, { localOnly = false } = {}) {
 async function changeSetup() { await stopServices(); settings.mode = null; saveSettings(); buildTrayMenu(); loadMain(); }
 
 handle('dm:discover', () => discover(1500), { localOnly: true });
-handle('dm:setup', async (_e, { mode, hubUrl } = {}) => {
+handle('dm:setup', async (_e, { mode, hubUrl, code } = {}) => {
   try {
     if (mode === 'host') {
       settings = { ...settings, mode: 'host', hubUrl: null, token: null, altHubUrls: [] }; activeHub = null;
@@ -303,9 +362,17 @@ handle('dm:setup', async (_e, { mode, hubUrl } = {}) => {
     } else {
       const url = normalizeHubUrl(hubUrl);
       if (!url) return { ok: false, error: 'Enter the hub address, e.g. 192.168.1.20' };
-      let info;
+      let info, token = keyFromLink(hubUrl);
       try { info = await fetchInfo(url); } catch (e) { return { ok: false, error: `Couldn't reach a hub at ${url} (${e.message}). Check the address and that the hub PC is on.` }; }
-      settings = { ...settings, mode: 'client', hubUrl: url, token: info.token, altHubUrls: [] }; activeHub = null;
+      if (info.token) token = info.token;   // hubs before 1.2.16 hand out their key
+      else {
+        const needCode = 'Enter the pairing code from the hub: on the hub PC, click + (Add device) → Desktop app.';
+        if (!token && !code) return { ok: false, needCode: true, error: needCode };
+        try { if (!token) token = await pairWithHub(url, String(code)); } catch (e) { return { ok: false, needCode: true, error: e.message }; }
+        try { info = await fetchInfo(url, token); } catch (e) { return { ok: false, error: `Couldn't reach a hub at ${url} (${e.message}).` }; }
+        if (info.token !== token) return { ok: false, needCode: true, error: 'That link is for a different hub. ' + needCode };
+      }
+      settings = { ...settings, mode: 'client', hubUrl: url, token, altHubUrls: [] }; activeHub = null;
       learnRemote(info);
       await startServices();
     }
@@ -343,7 +410,8 @@ handle('dm:install-update', async () => {
 handle('dm:set-startup', (_e, enabled) => { setStartup(!!enabled); buildTrayMenu(); return startupEnabled(); });
 handle('dm:set-start-minimized', (_e, on) => { settings.startMinimized = !!on; saveSettings(); return settings.startMinimized; });
 handle('dm:allow-firewall', () => allowFirewall());
-handle('dm:copy-link', () => { const u = shareUrl(); if (u) clipboard.writeText(u); return u; });
+handle('dm:firewall-status', () => firewallStatus());
+handle('dm:copy-link', () => { const u = dashboardLink(); if (u) clipboard.writeText(u); return !!u; });
 handle('dm:quit', () => { quitting = true; app.quit(); });
 
 // ---------------------------------------------------------------------------

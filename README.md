@@ -98,14 +98,17 @@ Windows doesn't expose CPU temperature to normal apps, which is why LibreHardwar
 
 ## Security
 
-Device Monitor is designed for a trusted home network.
+Device Monitor is designed for a home network, with remote access over Tailscale.
 
-- **Hub access.** Anyone on your network can view the dashboard and rename, reorder or remove devices. Agents need the hub's token to report, but anyone on the LAN can read that token from `/api/info`.
+- **Access key.** The dashboard and its API need the hub's key, except on the hub PC itself. Browsers get it once from the dashboard link (Settings → Dashboard link → Copy, or the Add device dialog) and keep it in an HttpOnly, SameSite=Strict cookie. Desktop apps join with a one-time 6-digit pairing code (valid 10 minutes, 5 tries) or the dashboard link. Agents use the same key to report.
+- **Apps check the hub first.** Before sending its key, an app makes the hub prove it knows it (an HMAC of a random challenge), so searching Tailscale peers or an old address can't leak the key.
+- **Local addresses only.** The hub refuses connections from outside the local network and Tailscale (public IPv4/IPv6), even if a port is forwarded to it.
+- **No cross-site requests.** Changes (POST/PUT/PATCH/DELETE) with another site's Origin are refused, including requests to `127.0.0.1` from web pages.
 - **Websites can't reach it.** The hub only answers requests addressed to it by IP address, localhost or this computer's own name. That blocks DNS-rebinding attacks from websites you visit. To use a custom DNS name, add it to `"allowedHosts"` in the hub's `config.json`.
 - **Strict pages.** Pages are served with a strict Content-Security-Policy, and every metric an agent reports is validated and re-typed by the hub.
 - **App updates** are signed (see above), so tampering on the network can't push code to your devices.
 - **One-line installs and downloads use plain HTTP.** Only use them on a network you trust.
-- **Firewall.** The app opens TCP 7777 (dashboard/API) and UDP 7778 (discovery) on *private* networks only.
+- **Firewall.** "Network access" in Settings opens TCP 7777 (dashboard/API) and UDP 7778 (discovery) to the local subnet only, on any network profile (many home networks are marked Public). It also removes the broad any-port rules Windows creates from its own "allow this app" prompt. Tailscale doesn't need any firewall rule.
 
 ## Development
 

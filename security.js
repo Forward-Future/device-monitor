@@ -105,6 +105,39 @@ function isPrivateAddress(ip) {
   return a === 10 || a === 127 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
 }
 
+// Who may connect at all: this PC, the home network and Tailscale. Anything else (a router port
+// forward, UPnP, a public IPv6 address) is refused even if a firewall lets it through.
+function isLocalAddress(ip) {
+  let a = String(ip || '').toLowerCase();
+  if (a.startsWith('::ffff:')) a = a.slice(7);
+  if (net.isIPv4(a)) return isPrivateAddress(a);
+  if (!net.isIPv6(a)) return false;
+  return a === '::1' || /^fe[89ab]/.test(a) || /^f[cd]/.test(a);   // loopback, link-local, unique-local
+}
+
+// Constant-time comparison for secrets.
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const x = Buffer.from(a), y = Buffer.from(b);
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+function cookie(header, name) {
+  for (const part of String(header || '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
+  }
+  return null;
+}
+
+// Browsers send Origin on cross-site POST/PUT/PATCH/DELETE; refuse those (CSRF from other sites,
+// including pages that target 127.0.0.1). Agents and the app send no Origin.
+function sameOrigin(req) {
+  const o = req.headers.origin;
+  if (!o) return true;
+  try { return new URL(o).host === String(req.headers.host || '').toLowerCase(); } catch { return false; }
+}
+
 // ---- response headers -----------------------------------------------------------
 const BASE_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -127,10 +160,10 @@ function htmlWithNonce(html) {
     "connect-src 'self'",
     "frame-ancestors 'none'",
     "base-uri 'none'",
-    "form-action 'none'",
+    "form-action 'self'",
     "object-src 'none'",
   ].join('; ');
   return { body, headers: { 'Content-Security-Policy': csp, 'X-Frame-Options': 'DENY' } };
 }
 
-module.exports = { isValidId, normalizeReport, normalizeProcesses, ACTIONS, hostAllowed, isPrivateAddress, htmlWithNonce, BASE_HEADERS };
+module.exports = { isValidId, normalizeReport, normalizeProcesses, ACTIONS, hostAllowed, isPrivateAddress, isLocalAddress, safeEqual, cookie, sameOrigin, htmlWithNonce, BASE_HEADERS };

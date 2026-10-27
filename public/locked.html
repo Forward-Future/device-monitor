@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Device Monitor</title>
+<style>
+  :root { color-scheme: dark; --page: #0d0d0d; --surface-1: #1a1a19; --surface-2: #232321; --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #898781; --border: rgba(255,255,255,0.10); --accent: #9085e9; --critical: #e66767; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--page); color: var(--text-primary); font: 15px/1.5 "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif; padding: 24px; }
+  main { width: min(440px, 100%); background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 26px; }
+  h1 { font-size: 19px; margin: 0 0 8px; }
+  p { margin: 0 0 14px; color: var(--text-secondary); }
+  ol { margin: 0 0 18px; padding-left: 20px; color: var(--text-secondary); }
+  form { display: flex; gap: 8px; }
+  input { flex: 1; min-width: 0; font: inherit; color: var(--text-primary); background: #0b0b0b; border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button { font: inherit; font-weight: 600; cursor: pointer; border-radius: 8px; padding: 9px 14px; border: 0; background: var(--accent); color: #0b0b0b; }
+  .err { color: var(--critical); }
+  .muted { color: var(--text-muted); font-size: 13px; margin: 16px 0 0; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>This dashboard is locked</h1>
+  <!--ERROR-->
+  <p>To open it on this device, use its dashboard link:</p>
+  <ol>
+    <li>On the hub PC, open Device Monitor → <b>Settings</b>.</li>
+    <li>Next to <b>Dashboard link</b>, click <b>Copy</b> and open that link here.</li>
+  </ol>
+  <p>Or paste the link or access key:</p>
+  <form method="get" action="/" autocomplete="off">
+    <input name="key" aria-label="Dashboard link or access key" placeholder="Link or access key" spellcheck="false" required>
+    <button type="submit">Open</button>
+  </form>
+  <p class="muted">Installing the app on this computer? <a href="/download">Download it here</a>.</p>
+</main>
+</body>
+</html>

@@ -47,15 +47,15 @@ document.getElementById('dash').textContent = location.origin;
 const fmtSize = b => b > 1e9 ? (b / 1e9).toFixed(1) + ' GB' : Math.round(b / 1e6) + ' MB';
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const steps = {
-  windows: '<ol><li>Run the installer. If Windows SmartScreen appears, click <b>More info → Run anyway</b> (the app isn\'t code-signed).</li><li>Choose <b>Connect to a hub</b> and pick this hub.</li></ol>',
-  mac: '<ol><li>Open the .dmg and drag Device Monitor to Applications.</li><li>The first time, <b>right-click the app → Open</b> (it isn\'t notarized by Apple).</li><li>Choose <b>Connect to a hub</b> and pick this hub.</li></ol>',
+  windows: '<ol><li>Run the installer. If Windows SmartScreen appears, click <b>More info → Run anyway</b> (the app isn\'t code-signed).</li><li>Choose <b>Connect to a hub</b>, pick this hub and enter the pairing code shown on the hub (<b>+</b> → Desktop app).</li></ol>',
+  mac: '<ol><li>Open the .dmg and drag Device Monitor to Applications.</li><li>The first time, <b>right-click the app → Open</b> (it isn\'t notarized by Apple).</li><li>Choose <b>Connect to a hub</b>, pick this hub and enter the pairing code shown on the hub (<b>+</b> → Desktop app).</li></ol>',
 };
 (async () => {
   const [files, info] = await Promise.all([fetch('/api/downloads').then(r => r.json()), fetch('/api/info').then(r => r.json())]);
   const card = (f, primary) => `<div class="card ${primary ? 'primary' : ''}"><div class="row"><div class="info"><div class="name">${f.platform === 'windows' ? 'Windows' : 'macOS'} app</div><div class="meta">${esc(f.name)} · ${fmtSize(f.size)}</div></div><a class="btn ${primary ? 'primary' : ''}" href="/download/${encodeURIComponent(f.name)}" download>Download</a></div>${primary ? steps[f.platform] : ''}</div>`;
   const forOs = files.filter(f => f.platform === os), others = files.filter(f => f.platform !== os);
   let html = forOs.map((f, i) => card(f, i === 0)).join('');
-  if (os === 'mac' && !forOs.length) {
+  if (os === 'mac' && !forOs.length && info.token) {   // only shown to a browser that has the dashboard key
     const cmd = `curl -fsSL "${location.origin}/install.sh?token=${info.token}" | bash`;
     html += `<div class="card primary"><div class="name">macOS</div><p class="muted" style="margin:6px 0 0">The Mac app hasn't been built yet. In the meantime, add this Mac to the dashboard by pasting this into <b>Terminal</b>. It runs a small background agent (no sudo):</p><code class="cmd">${esc(cmd)}</code><p class="muted">Then view the dashboard in your browser at the address below.</p></div>`;
   }

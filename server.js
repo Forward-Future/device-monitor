@@ -45,6 +45,9 @@ function lanAddresses() {
   return out;
 }
 
+// Lets an app check that a hub knows its key before sending the key (see main.js hubAnswers).
+const hubProof = (token, nonce) => crypto.createHmac('sha256', String(token)).update('device-monitor-hub:' + nonce).digest('hex');
+
 // Starts the hub. Resolves with { port, token, close } once listening.
 function startHub({ port = 7777, dataDir, rootDir = __dirname, assetDir = rootDir } = {}) {
 const PORT = port;
@@ -143,9 +146,11 @@ function readBody(req) {
   });
 }
 
-function sendHtml(res, file) {
-  const { body, headers } = sec.htmlWithNonce(fs.readFileSync(path.join(ROOT, 'public', file), 'utf8'));
-  res.writeHead(200, { ...sec.BASE_HEADERS, ...headers, 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+function sendHtml(res, file, status = 200, vars = {}) {
+  let html = fs.readFileSync(path.join(ROOT, 'public', file), 'utf8');
+  for (const [k, v] of Object.entries(vars)) html = html.split(`<!--${k}-->`).join(v);
+  const { body, headers } = sec.htmlWithNonce(html);
+  res.writeHead(status, { ...sec.BASE_HEADERS, ...headers, 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
   res.end(body);
 }
 
@@ -160,6 +165,23 @@ function isLoopback(req) {
   // Requests forwarded by tailscale serve also come from 127.0.0.1, but carry X-Forwarded-For and the tailnet name.
   return (a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1') && !req.headers['x-forwarded-for'] && /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(req.headers.host || '');
 }
+
+// ---- Access --------------------------------------------------------------------------
+// The dashboard and its API need the hub's key (the pairing token), except on the hub PC itself.
+// Browsers get it once from a dashboard link (/?key=…) and keep it in a cookie; the desktop app
+// sends it as a cookie or an Authorization header. Agents only use it to report.
+const keyOk = k => sec.safeEqual(k, config.token);
+function requestKey(req) {
+  const auth = String(req.headers.authorization || '');
+  return auth.startsWith('Bearer ') ? auth.slice(7).trim() : sec.cookie(req.headers.cookie, 'dm_key');
+}
+const authorized = req => isLoopback(req) || keyOk(requestKey(req));
+const keyCookie = req => `dm_key=${config.token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=34560000${req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : ''}`;
+
+// Desktop apps join with a short one-time code shown in the hub's Add device dialog, so the key
+// itself never has to be typed. One code at a time; it expires after 10 minutes or 5 wrong tries.
+const PAIR_MS = 10 * 60e3;
+let pairing = null;
 
 function hubUrlFor(req) {   // Host was validated by hostAllowed()
   return `http://${req.headers.host}`;
@@ -295,11 +317,23 @@ const server = http.createServer(async (req, res) => {
   if (!sec.hostAllowed(req.headers.host, (config.allowedHosts || []).concat(remote.dnsName || []))) {
     return send(res, 421, 'This hub only answers requests addressed to it by IP address or its own name.', 'text/plain');
   }
+  if (!sec.isLocalAddress(req.socket.remoteAddress)) {
+    return send(res, 403, 'This hub only accepts connections from your own network and Tailscale.', 'text/plain');
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD' && !sec.sameOrigin(req)) return send(res, 403, { error: 'cross-site request refused' });
   const url = new URL(req.url, 'http://x');
   const p = url.pathname;
   try {
+    // ---- open to anyone on the network ----
     if (req.method === 'GET' && (p === '/' || p === '/index.html')) {
-      return sendHtml(res, 'index.html');
+      let key = url.searchParams.get('key');
+      if (key != null) {   // a dashboard link: keep the key in a cookie and take it out of the address bar
+        key = (key.match(/[?&]key=([^&#\s]+)/)?.[1] || key).trim();   // the whole link pasted into the box
+        if (!keyOk(key)) return sendHtml(res, 'locked.html', 403, { ERROR: '<p class="err">That link or key isn’t valid for this hub.</p>' });
+        res.writeHead(302, { ...sec.BASE_HEADERS, 'Set-Cookie': keyCookie(req), Location: '/', 'Cache-Control': 'no-store' });
+        return res.end();
+      }
+      return authorized(req) ? sendHtml(res, 'index.html') : sendHtml(res, 'locked.html', 401);
     }
     if (req.method === 'GET' && (p === '/download' || p === '/download/')) {
       return sendHtml(res, 'download.html');
@@ -307,8 +341,9 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && p === '/api/downloads') return send(res, 200, listDownloads());
     if (req.method === 'GET' && Object.hasOwn(STATIC, p)) {
       const [file, type] = STATIC[p];
+      let data; try { data = fs.readFileSync(path.join(ROOT, 'public', file)); } catch { return send(res, 404, { error: 'not found' }); }
       res.writeHead(200, { ...sec.BASE_HEADERS, 'Content-Type': type, 'Cache-Control': 'no-cache' });
-      return res.end(fs.readFileSync(path.join(ROOT, 'public', file)));
+      return res.end(data);
     }
     if (req.method === 'GET' && p.startsWith('/api/update/')) {
       const platform = p.slice('/api/update/'.length);
@@ -325,10 +360,46 @@ const server = http.createServer(async (req, res) => {
         'Content-Length': file.size,
         'Content-Disposition': `attachment; filename="${name.replace(/"/g, '')}"`,
       });
-      return fs.createReadStream(path.join(DOWNLOADS_DIR, name)).pipe(res);
+      return fs.createReadStream(path.join(DOWNLOADS_DIR, name)).on('error', () => res.destroy()).pipe(res);
     }
     if (req.method === 'GET' && p === '/api/info') {
+      if (!authorized(req)) {
+        const nonce = url.searchParams.get('nonce');
+        const proof = nonce && /^[a-f0-9]{16,64}$/.test(nonce) ? hubProof(config.token, nonce) : undefined;
+        return send(res, 200, { app: 'device-monitor', hostname: os.hostname(), port: PORT, locked: true, proof });
+      }
       return send(res, 200, { token: config.token, port: PORT, addresses: lanAddresses(), hostname: os.hostname(), remote: { urls: remote.urls || [] } });
+    }
+    if (req.method === 'POST' && p === '/api/report') {
+      const body = await readBody(req);
+      if (!body || typeof body !== 'object' || !keyOk(body.token)) return send(res, 401, { error: 'bad token' });
+      return send(res, 200, handleReport(body));
+    }
+    if (req.method === 'POST' && p === '/api/pair') {
+      const { code } = await readBody(req);
+      if (!pairing || Date.now() > pairing.expires) return send(res, 403, { error: 'No pairing code is active. On the hub, click + (Add device) → Desktop app to get one.' });
+      if (!sec.safeEqual(String(code ?? '').replace(/\D/g, ''), pairing.code)) {
+        if (++pairing.tries >= 5) pairing = null;
+        return send(res, 403, { error: pairing ? 'Wrong pairing code.' : 'Wrong pairing code. Too many tries: get a new code from the hub.' });
+      }
+      pairing = null;
+      broadcast({ type: 'paired' });
+      return send(res, 200, { token: config.token });
+    }
+    // Installer / agent scripts. The installer needs the token; the raw agent does not contain it.
+    if (req.method === 'GET' && (p === '/install.ps1' || p === '/install.sh')) {
+      if (!keyOk(url.searchParams.get('token'))) return send(res, 403, 'echo "Invalid or missing token"\n', 'text/plain');
+      return send(res, 200, template(path.basename(p), { HUB: hubUrlFor(req), TOKEN: config.token }), 'text/plain; charset=utf-8');
+    }
+    if (req.method === 'GET' && (p === '/agent.ps1' || p === '/agent.sh' || p === '/agent-macos.sh' || p === '/uninstall.ps1' || p === '/uninstall.sh')) {
+      return send(res, 200, fs.readFileSync(path.join(ROOT, 'agent', path.basename(p))), 'text/plain; charset=utf-8');
+    }
+
+    // ---- everything else needs the key ----
+    if (!authorized(req)) return send(res, 401, { error: 'This dashboard is locked. Open it with the dashboard link from the Device Monitor app.' });
+    if (req.method === 'POST' && p === '/api/pair/code') {
+      pairing = { code: String(crypto.randomInt(0, 1e6)).padStart(6, '0'), expires: Date.now() + PAIR_MS, tries: 0 };
+      return send(res, 200, { code: pairing.code, expires: pairing.expires });
     }
     if (req.method === 'GET' && p === '/api/devices') {
       return send(res, 200, Object.keys(registry).map(deviceView));
@@ -340,11 +411,6 @@ const server = http.createServer(async (req, res) => {
       clients.add(res);
       req.on('close', () => clients.delete(res));
       return;
-    }
-    if (req.method === 'POST' && p === '/api/report') {
-      const body = await readBody(req);
-      if (!body || typeof body !== 'object' || body.token !== config.token) return send(res, 401, { error: 'bad token' });
-      return send(res, 200, handleReport(body));
     }
     if (req.method === 'GET' && p === '/api/energy') {
       const bounds = String(url.searchParams.get('bounds') || '').split(',').map(Number);
@@ -440,17 +506,10 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ok: true });
       }
     }
-    // Installer / agent scripts. The installer needs the token; the raw agent does not contain it.
-    if (req.method === 'GET' && (p === '/install.ps1' || p === '/install.sh')) {
-      if (url.searchParams.get('token') !== config.token) return send(res, 403, 'echo "Invalid or missing token"\n', 'text/plain');
-      return send(res, 200, template(path.basename(p), { HUB: hubUrlFor(req), TOKEN: config.token }), 'text/plain; charset=utf-8');
-    }
-    if (req.method === 'GET' && (p === '/agent.ps1' || p === '/agent.sh' || p === '/agent-macos.sh' || p === '/uninstall.ps1' || p === '/uninstall.sh')) {
-      return send(res, 200, fs.readFileSync(path.join(ROOT, 'agent', path.basename(p))), 'text/plain; charset=utf-8');
-    }
     send(res, 404, { error: 'not found' });
   } catch (e) {
-    send(res, 400, { error: String(e.message || e) });
+    if (res.headersSent) res.destroy();   // never let one bad request take the hub down
+    else send(res, 400, { error: String(e.message || e) });
   }
 });
 
@@ -466,7 +525,7 @@ return new Promise((resolve, reject) => {
 });
 }
 
-module.exports = { startHub, lanAddresses };
+module.exports = { startHub, lanAddresses, hubProof };
 
 // Headless mode: `node server.js` (e.g. on a home server). Also monitors this machine.
 if (require.main === module) {

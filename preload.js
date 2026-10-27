@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('deviceMonitorApp', {
   setStartup: enabled => ipcRenderer.invoke('dm:set-startup', !!enabled),
   setStartMinimized: on => ipcRenderer.invoke('dm:set-start-minimized', !!on),
   allowFirewall: () => ipcRenderer.invoke('dm:allow-firewall'),
+  firewallStatus: () => ipcRenderer.invoke('dm:firewall-status'),
   copyLink: () => ipcRenderer.invoke('dm:copy-link'),
   quit: () => ipcRenderer.invoke('dm:quit'),
   checkForUpdates: () => ipcRenderer.invoke('dm:check-updates'),
