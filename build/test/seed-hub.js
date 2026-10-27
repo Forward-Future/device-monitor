@@ -35,6 +35,7 @@ startHub({ port: 7788, dataDir: dir, rootDir: path.join(__dirname, '../..') }).t
         cpu: { name: 'Test CPU', usage: cpu, cores: [cpu, cpu / 2], temp: 45 + cpu * 0.4 },
         memory: { total: 64e9, used: 36e9 }, gpus: [{ name: 'Test GPU', usage: 90, temp: 80, power: d.id === 'mbp' ? null : 500, memUsed: 10e9, memTotal: d.id === 'mbp' ? 0 : 48e9 }],
         disks: [{ name: '/', total: 1e12, used: d.id === 'lab' ? 9.5e11 : 4e11 }], net: { rx: 1e5, tx: 5e4 }, diskIO: { read: 1e6, write: 2e6 },
+        ai: d.id === 'dgx' ? [{ app: 'ComfyUI', mem: 110255669248, models: [{ name: 'minimax_h3_fl2va_pruned_int8_convrot.safetensors', size: 20970379616, kind: 'unet' }, { name: 'qwen3vl_32b_minimax_h3_bf16.safetensors', size: 51506295256, kind: 'clip' }, { name: 'minimax_h3_video_vae_int8_convrot.safetensors', size: 2811065184, kind: 'vae' }] }, { app: 'Ollama', mem: 5.2e9, models: [{ name: 'qwen3:8b', size: 6.1e9 }] }] : d.id === 'ws' ? [] : undefined,
         features: ['procs', 'actions'], actions: d.id === 'mbp' ? [] : ['sleep', 'restart', 'shutdown'], macs: ['aa:bb:cc:dd:ee:0' + devs.indexOf(d)],
         processes: want[d.id] ? fakeProcs(d) : undefined, actionResult: results[d.id] }) })
         .then(r => r.json()).then(r => {

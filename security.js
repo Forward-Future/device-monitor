@@ -65,6 +65,11 @@ function normalizeReport(b) {
     diskIO: isObj(b.diskIO) ? { read: num(b.diskIO.read), write: num(b.diskIO.write) } : null,
     temps: list(b.temps, 256).filter(isObj).map(t => ({ name: str(t.name, 80), parent: str(t.parent, 120), value: num(t.value, -60, 250) })),
     fans: list(b.fans, 64).filter(isObj).map(f => ({ name: str(f.name, 80), rpm: num(f.rpm, 0, 1e5) })),
+    // AI models loaded per app (null = the agent doesn't check; [] = nothing loaded).
+    ai: Array.isArray(b.ai) ? list(b.ai, 8).filter(isObj).map(g => ({
+      app: str(g.app, 40), mem: num(g.mem),
+      models: list(g.models, 16).filter(isObj).map(m => ({ name: str(m.name, 200), size: num(m.size), kind: str(m.kind, 30) })).filter(m => m.name),
+    })).filter(g => g.app) : null,
   };
 }
 

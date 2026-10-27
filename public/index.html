@@ -115,8 +115,12 @@
   summary::before { content: "▸ "; } details[open] summary::before { content: "▾ "; }
   .section { margin-top: 14px; }
   .section h4 { margin: 0 0 8px; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .06em; }
-  .cores { display: grid; grid-template-columns: repeat(auto-fill, minmax(34px, 1fr)); gap: 2px; }
-  .core { height: 28px; border-radius: 4px; font-size: 10px; display: grid; place-items: center; color: var(--text-primary); }
+  .ai-app { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; font-weight: 600; margin: 10px 0 4px; }
+  .ai-app:first-of-type { margin-top: 0; }
+  .ai-app small { font-weight: 400; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+  .kv small { color: var(--text-muted); }
+  .kv.ai-list { grid-template-columns: minmax(0, 1fr) auto; }
+  .kv.ai-list span:nth-child(even) { white-space: nowrap; }
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; }
   .kv span:nth-child(odd) { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .kv span:nth-child(even) { text-align: right; font-variant-numeric: tabular-nums; }
@@ -475,7 +479,7 @@ function updateCard(id) {
 // (model names, memory and drive sizes) is kept.
 function zeroed(L) {
   return { ...L, offline: true, uptime: null, temps: [], fans: [],
-    cpu: { ...L.cpu, usage: 0, temp: null, clockMHz: null, cores: (L.cpu?.cores || []).map(() => 0) },
+    cpu: { ...L.cpu, usage: 0, temp: null, clockMHz: null }, ai: null,
     memory: L.memory && { ...L.memory, used: 0 },
     gpus: (L.gpus || []).map(g => ({ ...g, usage: 0, temp: null, memUsed: 0, power: g.power != null ? 0 : null, clockMHz: null, fan: null })),
     net: L.net && { rx: 0, tx: 0 },
@@ -488,18 +492,20 @@ function stat(k, v, pct, color) {
   return `<div class="stat"><div class="k">${k}</div><div class="v" title="${v.replace(/<[^>]+>/g, '')}">${v}</div>${pct != null ? `<div class="bar"><div style="width:${pct.toFixed(1)}%;--c:${color || 'var(--text-secondary)'}"></div></div>` : ''}</div>`;
 }
 
-function coreColor(u) {
-  // Sequential blue ramp (single hue, light = low on dark surface means recede -> use dark-to-bright)
-  const ramp = ['#104281', '#184f95', '#1c5cab', '#256abf', '#2a78d6', '#3987e5', '#5598e7', '#6da7ec', '#86b6ef'];
-  return ramp[Math.min(ramp.length - 1, Math.floor((u || 0) / 100 * ramp.length))];
+// AI models loaded in Ollama, LM Studio, ComfyUI, vLLM, llama.cpp… (reported by agents since 1.2.15).
+// Size is the model file (Ollama: its memory footprint); the app line shows the GPU memory it holds.
+function aiHtml(ai) {
+  if (!Array.isArray(ai)) return '';
+  const body = ai.length ? ai.map(g =>
+    `<div class="ai-app"><span>${esc(g.app)}</span><small>${g.mem ? fmtBytes(g.mem) + ' GPU memory' : ''}</small></div>` +
+    (g.models.length
+      ? `<div class="kv ai-list">${g.models.map(m => `<span title="${esc(m.name)}">${esc(m.name)}${m.kind ? ` <small>${esc(m.kind)}</small>` : ''}</span><span>${m.size ? fmtBytes(m.size) : '–'}</span>`).join('')}</div>`
+      : '<div class="hint">Model name not available</div>')).join('')
+    : '<div class="hint">No AI models loaded</div>';
+  return `<div class="section"><h4>Loaded models</h4>${body}</div>`;
 }
 function detailHtml(L) {
-  let h = '';
-  const cores = L.cpu?.cores || [];
-  if (cores.length) {
-    h += `<div class="section"><h4>CPU threads (${cores.length})</h4><div class="cores">` +
-      cores.map((u, i) => `<div class="core" style="background:${coreColor(u)}" title="Thread ${i}: ${fmtPct(u)}">${Math.round(u)}</div>`).join('') + '</div></div>';
-  }
+  let h = aiHtml(L.ai);
   for (const [i, g] of (L.gpus || []).entries()) {
     const rows = [['Model', esc(g.name)], ['Load', fmtPct(g.usage)], ['Temperature', fmtTemp(g.temp)]];
     if (g.memTotal) rows.push(['VRAM', `${fmtBytes(g.memUsed)} / ${fmtBytes(g.memTotal, 0)}`]);

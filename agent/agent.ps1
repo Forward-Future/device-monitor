@@ -46,6 +46,66 @@ function Get-HwSensors {
   return $null
 }
 
+# AI models loaded in Ollama, LM Studio or ComfyUI (checked every 5th report).
+function Get-GpuProcessMemory([int[]]$ids) {
+  $total = 0.0
+  foreach ($c in Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUProcessMemory) {
+    if ($c.Name -match '^pid_(\d+)_' -and [int]$Matches[1] -in $ids) { $total += [double]$c.DedicatedUsage }
+  }
+  if ($total -gt 0) { return $total } else { return $null }
+}
+function Get-AiModels {
+  $groups = @()
+  # Only ask apps that are listening (a refused connection to localhost takes ~1 s on Windows).
+  $ports = @([Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners() | ForEach-Object { $_.Port })
+  if ($ports -contains 11434) { try {
+    $j = Invoke-RestMethod 'http://127.0.0.1:11434/api/ps' -TimeoutSec 1
+    if ($j.models) {
+      $vram = 0.0; foreach ($m in $j.models) { $vram += [double]$m.size_vram }
+      $groups += [ordered]@{ app = 'Ollama'; mem = $(if ($vram) { $vram } else { $null })
+        models = @($j.models | ForEach-Object { [ordered]@{ name = $_.name; size = [double]$_.size } }) }
+    }
+  } catch { } }
+  $lms = Join-Path $env:USERPROFILE '.lmstudio\bin\lms.exe'
+  $lmsProcs = @(Get-Process -Name 'LM Studio', 'llmster' -ErrorAction SilentlyContinue)
+  if ((Test-Path $lms) -and $lmsProcs.Count) {
+    $arr = @((& $lms ps --json 2>$null | Out-String | ConvertFrom-Json) | ForEach-Object { $_ })
+    if ($arr.Count) {
+      $groups += [ordered]@{ app = 'LM Studio'; mem = Get-GpuProcessMemory $lmsProcs.Id
+        models = @($arr | ForEach-Object { [ordered]@{ name = $(if ($_.displayName) { $_.displayName } else { $_.identifier }); size = [double]$_.sizeBytes } }) }
+    }
+  }
+  if ($ports -contains 8188) { try {
+    # ComfyUI doesn't list what it holds in memory; use the loaders of the last workflow it ran.
+    $h = Invoke-RestMethod 'http://127.0.0.1:8188/history?max_items=1' -TimeoutSec 1
+    $owner = (Get-NetTCPConnection -LocalPort 8188 -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess
+    $roots = @(Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'ComfyUI\models')
+    if ($owner) {
+      $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$owner").CommandLine
+      if ($cmd -match '"?([^"]*?)main\.py') { $roots = @((Join-Path $Matches[1] 'models')) + $roots }
+    }
+    $models = @(); $names = @{}
+    foreach ($item in $h.PSObject.Properties.Value) {
+      if ($item.prompt.Count -lt 3) { continue }
+      foreach ($node in $item.prompt[2].PSObject.Properties.Value) {
+        if ("$($node.class_type)" -notmatch 'Loader') { continue }
+        foreach ($p in $node.inputs.PSObject.Properties) {
+          if ($p.Name -notlike '*_name' -or $p.Value -isnot [string] -or $names[$p.Value]) { continue }
+          $names[$p.Value] = 1; $size = $null
+          foreach ($r in $roots) {
+            $f = Get-ChildItem -Path $r -Directory -ErrorAction SilentlyContinue | ForEach-Object { Join-Path $_.FullName $p.Value } | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+            if ($f) { $size = [double](Get-Item -LiteralPath $f).Length; break }
+          }
+          $models += [ordered]@{ name = $p.Value; size = $size; kind = $p.Name -replace '_name$', '' }
+        }
+      }
+    }
+    if ($models.Count) { $groups += [ordered]@{ app = 'ComfyUI'; mem = $(if ($owner) { Get-GpuProcessMemory $owner } else { $null }); models = $models } }
+  } catch { } }
+  return ,$groups
+}
+$ai = @(); $aiTick = 0
+
 while ($true) {
   if ($ParentPid -and -not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { exit 0 }
   $now = [DateTime]::UtcNow
@@ -151,6 +211,8 @@ while ($true) {
 
   $payload.cpu = $cpu; $payload.memory = $memory; $payload.gpus = $gpus; $payload.disks = $disks
   $payload.net = $netRate; $payload.diskIO = $diskRate; $payload.temps = $temps; $payload.fans = $fans
+  if ($aiTick++ % 5 -eq 0) { $ai = Get-AiModels }
+  $payload.ai = $ai
 
   if ($null -ne $usage) {
     try {

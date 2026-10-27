@@ -58,12 +58,85 @@ cpu_power() {
 }
 PREV_RAPL="$(read_rapl)"
 
+# AI models loaded (Ollama, LM Studio, ComfyUI, vLLM, llama.cpp...), checked every 5th report.
+PY3="$(command -v python3)"
+read -r -d '' AI_PY <<'PY'
+import json, os, re, subprocess, urllib.request
+def get(url):
+    try:
+        with urllib.request.urlopen(url, timeout=1.5) as r: return json.load(r)
+    except Exception: return None
+def run(args):
+    try: return subprocess.run(args, capture_output=True, text=True, timeout=6).stdout
+    except Exception: return ''
+def cmdline(pid):
+    try:
+        with open('/proc/%d/cmdline' % pid, 'rb') as f: return [a.decode('utf-8', 'replace') for a in f.read().split(b'\0') if a]
+    except Exception: return []
+def arg(argv, *names):
+    for i, a in enumerate(argv):
+        for n in names:
+            if a == n and i + 1 < len(argv): return argv[i + 1]
+            if a.startswith(n + '='): return a.split('=', 1)[1]
+    return None
+def comfy(port, home, mem):
+    # ComfyUI doesn't list what it holds in memory; use the loaders of the last workflow it ran.
+    models, root = [], os.path.join(home, 'models') if home else ''
+    for item in (get('http://127.0.0.1:%s/history?max_items=1' % port) or {}).values():
+        prompt = item.get('prompt') or []
+        for node in (prompt[2] if len(prompt) > 2 and isinstance(prompt[2], dict) else {}).values():
+            if 'Loader' not in str(node.get('class_type', '')): continue
+            for k, v in (node.get('inputs') or {}).items():
+                if k.endswith('_name') and isinstance(v, str) and v not in [m['name'] for m in models]:
+                    size = None
+                    for sub in (os.listdir(root) if root and os.path.isdir(root) else []):
+                        f = os.path.join(root, sub, v)
+                        if os.path.isfile(f): size = os.path.getsize(f); break
+                    models.append({'name': v, 'size': size, 'kind': k[:-5]})
+    return {'app': 'ComfyUI', 'mem': mem, 'models': models}
+gpu = {}
+for line in run(['nvidia-smi', '--query-compute-apps=pid,used_memory', '--format=csv,noheader,nounits']).splitlines():
+    p = [x.strip() for x in line.split(',')]
+    if len(p) == 2 and p[0].isdigit() and re.match(r'^\d+(\.\d+)?$', p[1]): gpu[int(p[0])] = gpu.get(int(p[0]), 0) + int(float(p[1]) * 1048576)
+groups = []
+j = get('http://127.0.0.1:11434/api/ps')
+if j and j.get('models'):
+    groups.append({'app': 'Ollama', 'mem': sum(m.get('size_vram') or 0 for m in j['models']) or None,
+                   'models': [{'name': m.get('name'), 'size': m.get('size')} for m in j['models']]})
+lms = os.path.expanduser('~/.lmstudio/bin/lms')
+if os.path.exists(lms) and run(['pgrep', '-f', 'llmster|LM Studio|lmstudio']).strip():
+    try: arr = json.loads(run([lms, 'ps', '--json']) or '[]')
+    except Exception: arr = []
+    if arr:
+        mem = sum(m for pid, m in gpu.items() if re.search('lmstudio|llmster', ' '.join(cmdline(pid)).lower())) or None
+        groups.append({'app': 'LM Studio', 'mem': mem,
+                       'models': [{'name': m.get('displayName') or m.get('identifier') or m.get('modelKey'), 'size': m.get('sizeBytes')} for m in arr]})
+for pid, used in sorted(gpu.items(), key=lambda x: -x[1]):
+    argv = cmdline(pid); c = ' '.join(argv).lower()
+    if not argv or used < 256 * 1048576 or re.search('ollama|lmstudio|llmster', c): continue
+    try: home = os.readlink('/proc/%d/cwd' % pid)
+    except Exception: home = ''
+    if 'comfy' in c or 'comfy' in home.lower():
+        groups.append(comfy(arg(argv, '--port') or '8188', home, used)); continue
+    app = 'vLLM' if 'vllm' in c else 'SGLang' if 'sglang' in c else 'llama.cpp' if 'llama-server' in c else os.path.basename(argv[0])
+    m = arg(argv, '--model', '-m', '--model-path')
+    if not m and 'serve' in argv:
+        i = argv.index('serve'); m = argv[i + 1] if i + 1 < len(argv) and not argv[i + 1].startswith('-') else None
+    if m and os.path.exists(m): m = os.path.basename(m.rstrip('/'))
+    groups.append({'app': app, 'mem': used, 'models': [{'name': m, 'size': None}] if m else []})
+if not any(g['app'] == 'ComfyUI' for g in groups) and (get('http://127.0.0.1:8188/system_stats') or {}).get('system', {}).get('comfyui_version'):
+    g = comfy('8188', '', None)
+    if g['models']: groups.append(g)
+print(json.dumps(groups[:8], separators=(',', ':')))
+PY
+AI_N=0
 PREV_CPU="$(read_cpu)"; PREV_NET="$(read_net)"; PREV_DISK="$(read_disk)"; PREV_T=$(date +%s.%N)
 sleep "$INTERVAL"
 while true; do
   # Exit with the desktop app that started us (if any).
   if [ -n "$PARENT_PID" ] && ! kill -0 "$PARENT_PID" 2>/dev/null; then exit 0; fi
   T=$(date +%s.%N); CUR_CPU="$(read_cpu)"; CUR_NET="$(read_net)"; CUR_DISK="$(read_disk)"
+  if [ -n "$PY3" ] && [ $((AI_N++ % 5)) -eq 0 ]; then AI="$("$PY3" -c "$AI_PY" 2>/dev/null)"; fi
   CPU_JSON="$(paste -d' ' <(echo "$PREV_CPU") <(echo "$CUR_CPU") | awk '
     { d=$6-$3; u=(d>0)?100*(1-($5-$2)/d):0; if(u<0)u=0; v=sprintf("%.1f",u)
       if($1=="cpu") total=v; else cores=cores (cores==""?"":",") v }
@@ -96,7 +169,7 @@ while true; do
     GPUS="$GPUS${GPUS:+,}{\"name\":\"AMD GPU\",\"vendor\":\"amd\",\"usage\":$U,\"temp\":$GT,\"memUsed\":$MU,\"memTotal\":$MT,\"power\":$GP}"
   done
 
-  BODY="{\"id\":\"$ID\",\"token\":\"$TOKEN\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"linux\",\"appVersion\":\"$(esc "${DM_APP_VERSION:-}")\",\"os\":\"$(esc "$OS")\",\"formFactor\":\"$FORM\",\"power\":{\"cpu\":$(num "$CPU_W")},\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$THREADS,\"clockMHz\":$MHZ,\"temp\":$(cpu_temp),$CPU_JSON},\"memory\":{$MEM},\"gpus\":[$GPUS],\"disks\":[$DISKS],$RATES}"
+  BODY="{\"id\":\"$ID\",\"token\":\"$TOKEN\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"linux\",\"appVersion\":\"$(esc "${DM_APP_VERSION:-}")\",\"os\":\"$(esc "$OS")\",\"formFactor\":\"$FORM\",\"power\":{\"cpu\":$(num "$CPU_W")},\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$THREADS,\"clockMHz\":$MHZ,\"temp\":$(cpu_temp),$CPU_JSON},\"memory\":{$MEM},\"gpus\":[$GPUS],\"disks\":[$DISKS],$RATES,\"ai\":${AI:-null}}"
   curl -fsS -m 5 -X POST -H 'Content-Type: application/json' --data-binary "$BODY" "$HUB/api/report" >/dev/null 2>&1
   sleep "$INTERVAL"
 done
