@@ -440,7 +440,7 @@ function updateCard(id) {
   const d = devices.get(id); if (!d) return;
   const c = cards.get(id) || createCard(id);
   const { el, refs } = c;
-  const L = d.latest || {};
+  const L = d.online ? d.latest || {} : zeroed(d.latest || {});
   el.classList.toggle('offline', !d.online);
   refs.name.textContent = d.name || d.hostname || id;
   refs.name.title = d.hostname || '';
@@ -451,8 +451,9 @@ function updateCard(id) {
   setGauge(refs.cpu, cpu.usage);
   setGauge(refs.gpu, gpus.length ? g.usage : null);
   setGauge(refs.mem, mem.total ? mem.used / mem.total * 100 : null);
-  refs.cpuSub.innerHTML = tempPill(cpu.temp, cpu.tempSource);
-  refs.gpuSub.innerHTML = gpus.length ? tempPill(g.temp) : '<span class="hint">no GPU</span>';
+  const off = '<span class="hint">offline</span>';
+  refs.cpuSub.innerHTML = d.online ? tempPill(cpu.temp, cpu.tempSource) : off;
+  refs.gpuSub.innerHTML = !gpus.length ? '<span class="hint">no GPU</span>' : d.online ? tempPill(g.temp) : off;
   refs.memSub.textContent = mem.total ? `${fmtBytes(mem.used)} / ${fmtBytes(mem.total, 0)}` : '';
 
   const stats = [];
@@ -468,6 +469,17 @@ function updateCard(id) {
 
   if (refs.details.open) refs.detail.innerHTML = detailHtml(L);
   drawChart(id);
+}
+
+// An offline device shows zeros rather than its last reading; only what the hardware is
+// (model names, memory and drive sizes) is kept.
+function zeroed(L) {
+  return { ...L, offline: true, uptime: null, temps: [], fans: [],
+    cpu: { ...L.cpu, usage: 0, temp: null, clockMHz: null, cores: (L.cpu?.cores || []).map(() => 0) },
+    memory: L.memory && { ...L.memory, used: 0 },
+    gpus: (L.gpus || []).map(g => ({ ...g, usage: 0, temp: null, memUsed: 0, power: g.power != null ? 0 : null, clockMHz: null, fan: null })),
+    net: L.net && { rx: 0, tx: 0 },
+    diskIO: L.diskIO && { read: 0, write: 0 } };
 }
 
 const shortCpu = n => (n || '').replace(/\(R\)|\(TM\)|CPU|Processor|@.*$/gi, '').replace(/\s+/g, ' ').trim() || '–';
@@ -505,7 +517,7 @@ function detailHtml(L) {
   if (L.fans?.length) {
     h += `<div class="section"><h4>Fans</h4><div class="kv">${L.fans.map(f => `<span>${esc(f.name)}</span><span>${f.rpm == null ? '–' : Math.round(f.rpm)} RPM</span>`).join('')}</div></div>`;
   }
-  if (!L.temps?.length && L.platform === 'windows' && L.cpu?.temp == null) {
+  if (!L.offline && !L.temps?.length && L.platform === 'windows' && L.cpu?.temp == null) {
     h += `<div class="section hint">CPU temperature, fans and motherboard sensors appear here if <b>LibreHardwareMonitor</b> is running on this PC.</div>`;
   }
   return h || '<div class="section hint">No data yet.</div>';
