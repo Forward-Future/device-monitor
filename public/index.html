@@ -63,6 +63,8 @@
   .app-window.platform-darwin header { padding-left: 92px; padding-right: 24px; }
   /* Windows: the scrollbar's gutter runs up beside the header, under the window buttons. Start its
      track below the header and continue the header's bottom line across the gutter. */
+  /* When the page doesn't scroll, no scrollbar is drawn there: the window background carries the line instead. */
+  .app-window.platform-win32 { background: linear-gradient(#0d0d0d 0 64px, #252525 64px 65px, #0d0d0d 65px) fixed; }
   .app-window.platform-win32::-webkit-scrollbar { width: 12px; background: linear-gradient(#0d0d0d 0 64px, var(--border) 64px 65px, var(--page) 65px); }
   .app-window.platform-win32::-webkit-scrollbar-track { margin-top: 65px; }
   .app-window.platform-win32::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.16); border: 3px solid transparent; border-radius: 6px; background-clip: padding-box; }
@@ -87,13 +89,13 @@
   .icon-btn { background: none; border: 0; color: var(--text-muted); padding: 4px; border-radius: 6px; line-height: 0; }
   .icon-btn:hover { color: var(--text-primary); background: var(--surface-2); }
 
-  .gauges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .gauges { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .gauge { display: flex; flex-direction: column; align-items: center; gap: 4px; }
   .gauge svg { width: 100%; max-width: 80px; }
   .gauge .track { stroke: var(--grid); }
   .gauge .val { font-size: 26px; font-weight: 600; fill: var(--text-primary); }
   .gauge .lbl { font-size: 13px; letter-spacing: .08em; fill: var(--text-muted); text-transform: uppercase; }
-  .gauge-sub { font-size: 11px; color: var(--text-secondary); min-height: 20px; display: flex; align-items: center; }
+  .gauge-sub { font-size: 11px; color: var(--text-secondary); min-height: 20px; display: flex; align-items: center; max-width: 100%; white-space: nowrap; overflow: hidden; }
   .pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 99px; background: var(--surface-2); font-size: 11px; color: var(--text-primary); }
   .pill i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
   .pill small { color: var(--text-muted); font-size: 10px; }
@@ -355,6 +357,12 @@ function fmtBytes(b, d = 1) {
   return b.toFixed(i < 2 ? 0 : d) + ' ' + u[i];
 }
 const fmtRate = b => b == null ? '–' : fmtBytes(b) + '/s';
+// "387 / 771 GB": one unit when both sides share it.
+function memPair(used, total) {
+  const t = fmtBytes(total, 0), u = fmtBytes(used, used < 1024 ** 3 * 100 ? 1 : 0);
+  const [uv, uu] = u.split(' '), tu = t.split(' ')[1];
+  return uu === tu ? `${uv} / ${t}` : `${u} / ${t}`;
+}
 function fmtTemp(c) {
   if (c == null) return '–';
   return unit === 'F' ? Math.round(c * 9 / 5 + 32) + '°F' : Math.round(c) + '°C';
@@ -377,8 +385,9 @@ function tempStatus(c) {
 }
 function tempPill(c, src) {
   const st = tempStatus(c);
-  if (!st) return '<span class="hint">no temp sensor</span>';
-  return `<span class="pill"><i style="background:${st[0]}"></i>${fmtTemp(c)} <small>${st[1]}${src === 'acpi' ? ' · ACPI' : ''}</small></span>`;
+  if (!st) return '<span class="hint">no sensor</span>';
+  const tip = st[1] + (src === 'acpi' ? ' · ACPI sensor' : '');
+  return `<span class="pill" title="${tip}"><i style="background:${st[0]}"></i>${fmtTemp(c)}${st[1] === 'Normal' ? '' : ` <small>${st[1]}</small>`}</span>`;
 }
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -468,7 +477,7 @@ function updateCard(id) {
   const off = '<span class="hint">offline</span>';
   refs.cpuSub.innerHTML = d.online ? tempPill(cpu.temp, cpu.tempSource) : off;
   refs.gpuSub.innerHTML = !gpus.length ? '<span class="hint">no GPU</span>' : d.online ? tempPill(g.temp) : off;
-  refs.memSub.textContent = mem.total ? `${fmtBytes(mem.used)} / ${fmtBytes(mem.total, 0)}` : '';
+  refs.memSub.textContent = mem.total ? memPair(mem.used, mem.total) : '';
 
   const stats = [];
   stats.push(stat('CPU', esc(shortCpu(cpu.name)) + (cpu.clockMHz ? ` · ${(cpu.clockMHz / 1000).toFixed(2)} GHz` : '')));
