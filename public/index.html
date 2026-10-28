@@ -106,6 +106,9 @@
   .card .legend { gap: 12px; font-size: 11px; margin-bottom: 6px; }
   .legend span::before { content: ""; display: inline-block; width: 10px; height: 2px; vertical-align: middle; margin-right: 6px; background: var(--c); border-radius: 2px; }
   .legend .range { margin-left: auto; color: var(--text-muted); }
+  .range-sel { margin-left: auto; background: none; border: 0; border-radius: 6px; padding: 1px 2px; color: var(--text-muted); font: inherit; cursor: pointer; }
+  .range-sel:hover { color: var(--text-primary); background: var(--surface-2); }
+  .range-sel option { background: var(--surface-2); color: var(--text-primary); }
   .legend .range::before { display: none; }
   .tip { position: absolute; pointer-events: none; background: #0b0b0b; border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; font-size: 12px; white-space: nowrap; display: none; z-index: 2; }
   .tip b { font-weight: 600; } .tip .row::before { content: ""; display: inline-block; width: 8px; height: 2px; margin-right: 6px; vertical-align: middle; background: var(--c); }
@@ -137,22 +140,18 @@
 
   .empty { grid-column: 1 / -1; text-align: center; padding: 80px 20px; color: var(--text-secondary); }
   .empty.small { padding: 28px 20px; font-size: 13px; }
-  /* Offline devices: a compact list under the cards instead of full cards. */
-  #offlineList { padding: 0 22px 28px; margin-top: -6px; }
-  .off-toggle { display: inline-flex; align-items: center; gap: 6px; background: none; border: 0; padding: 4px 2px; color: var(--text-secondary); font-size: 12px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; cursor: pointer; }
-  .off-toggle:hover { color: var(--text-primary); }
-  .off-toggle svg { transition: transform .15s; }
-  #offlineList.collapsed .off-toggle svg { transform: rotate(-90deg); }
-  #offlineList.collapsed .off-rows { display: none; }
-  .off-rows { margin-top: 8px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
-  .off-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 8px 10px 8px 16px; cursor: pointer; }
-  .off-row + .off-row { border-top: 1px solid var(--border); }
-  .off-row:hover { background: var(--surface-2); }
-  .off-row .dot { margin: 0; background: var(--text-muted); box-shadow: none; }
-  .off-name { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-  .off-name b { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; max-width: 45%; }
-  .off-name span { font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .off-row .btn { padding: 4px 10px; font-size: 12px; }
+  /* Offline devices: a small button in the header opens the list. */
+  .off-wrap { position: relative; }
+  .off-btn { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; border-radius: 99px; border: 1px solid var(--border); background: none; color: var(--text-secondary); font-size: 12px; }
+  .off-btn:hover, .off-btn[aria-expanded="true"] { background: var(--surface-2); color: var(--text-primary); }
+  .off-btn i { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
+  .off-pop { position: absolute; top: calc(100% + 8px); right: 0; width: 320px; max-height: 60vh; overflow-y: auto; background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 4px; box-shadow: 0 12px 36px rgba(0,0,0,.55); z-index: 8; white-space: normal; -webkit-app-region: no-drag; }
+  .off-pop h5 { margin: 6px 10px 4px; font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .08em; }
+  .off-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; padding: 7px 4px 7px 10px; border-radius: 8px; cursor: pointer; }
+  .off-row:hover { background: #2c2c2a; }
+  .off-row b { display: block; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .off-row small { display: block; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .off-row .btn { height: 26px; padding: 0 9px; font-size: 12px; }
   .empty h2 { color: var(--text-primary); font-weight: 600; }
 
   dialog { background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 14px; padding: 22px; width: min(640px, calc(100vw - 24px)); }
@@ -171,7 +170,7 @@
   .menu .danger { color: #e66767; }
   /* ---------- history page ---------- */
   .chart canvas { cursor: pointer; }
-  body.history-mode #grid, body.history-mode #range, body.history-mode #offlineList { display: none; }
+  body.history-mode #grid { display: none; }
   #historyView { padding: 20px 24px 40px; max-width: 1280px; margin: 0 auto; }
   #historyView[hidden] { display: none; }
   .hv-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 18px; }
@@ -198,7 +197,7 @@
   .hv-empty { color: var(--text-secondary); padding: 40px 0; text-align: center; }
   @media (max-width: 520px) { #historyView { padding: 12px; } }
   /* ---------- advanced page (power & usage) ---------- */
-  body.adv-mode #grid, body.adv-mode #range, body.adv-mode #offlineList { display: none; }
+  body.adv-mode #grid { display: none; }
   #advView { padding: 20px 24px 40px; max-width: 1280px; margin: 0 auto; }
   #advView[hidden] { display: none; }
   #advView .hv-bar h2 { margin: 0; font-size: 20px; font-weight: 600; }
@@ -277,7 +276,10 @@
   </div>
   <div class="summary" id="summary"></div>
   <div class="spacer"></div>
-  <div class="seg" id="range" title="Chart range"><button data-r="10m"><span class="full">10 min</span><span class="short">10m</span></button><button data-r="1h"><span class="full">60 min</span><span class="short">1h</span></button><button data-r="6h"><span class="full">6 hours</span><span class="short">6h</span></button></div>
+  <div class="off-wrap" id="offWrap" hidden>
+    <button class="off-btn" id="offBtn" aria-haspopup="true" aria-expanded="false"><i></i><span id="offCount"></span></button>
+    <div class="off-pop" id="offPop" hidden></div>
+  </div>
   <button class="btn view-btn" id="historyBtn" title="History" aria-label="History" aria-pressed="false"><svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg></button>
   <button class="btn view-btn" id="advBtn" title="Advanced: power, electricity cost and usage totals" aria-label="Advanced" aria-pressed="false"><svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg></button>
   <button class="btn primary" id="addBtn" title="Add device" aria-label="Add device"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
@@ -290,7 +292,6 @@
   <a class="btn primary" id="legacyLink" target="_blank" rel="noopener">Download update</a>
 </div>
 <main id="grid"></main>
-<section id="offlineList" hidden></section>
 <section id="historyView" hidden>
   <div class="hv-bar">
     <a class="btn" href="#/">← Dashboard</a>
@@ -452,7 +453,7 @@ function createCard(id) {
       <div class="gauge g-mem">${gaugeSvg('Memory', 'var(--mem)')}<div class="gauge-sub"></div></div>
     </div>
     <div class="chart">
-      <div class="legend"><span style="--c:var(--cpu)">CPU</span><span style="--c:var(--gpu)">GPU</span><span style="--c:var(--mem)">Memory</span><span class="range">${RANGE_LABEL[range]}</span></div>
+      <div class="legend"><span style="--c:var(--cpu)">CPU</span><span style="--c:var(--gpu)">GPU</span><span style="--c:var(--mem)">Memory</span><select class="range-sel" title="Chart range">${Object.entries(RANGE_LABEL).map(([r, l]) => `<option value="${r}"${r === rangeOf(id) ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
       <canvas></canvas>
       <div class="tip"></div>
     </div>
@@ -473,6 +474,7 @@ function createCard(id) {
   canvas.addEventListener('mouseleave', () => { refs.hover = null; drawChart(id); });
   canvas.addEventListener('click', () => { location.hash = '#/history/' + encodeURIComponent(id); });
   canvas.title = 'Open history';
+  $('.range-sel', el).addEventListener('change', e => setRange(id, e.target.value));
   cards.set(id, { el, refs });
   return cards.get(id);
 }
@@ -583,7 +585,7 @@ function drawChart(id) {
   const cw = W - padL - padR, ch = H - padT - padB;
   const ser = series.get(id) || { points: [], resolution: 2000 };
   const hist = ser.points;
-  const span = RANGE_MS[range], tEnd = Date.now(), tStart = tEnd - span;
+  const r = rangeOf(id), span = RANGE_MS[r], tEnd = Date.now(), tStart = tEnd - span;
   const gap = Math.max(10000, ser.resolution * 3);
   const x = t => padL + (t - tStart) / span * cw;
   const y = v => padT + ch - (v / 100) * ch;
@@ -622,7 +624,7 @@ function drawChart(id) {
         ctx.beginPath(); ctx.arc(px, y(best[key]), 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       }
       const secs = Math.round((tEnd - best.t) / 1000);
-      tip.innerHTML = `<div class="t">${range !== '10m' ? clock(best.t) : secs < 5 ? 'now' : secs < 60 ? secs + 's ago' : Math.floor(secs / 60) + 'm ' + (secs % 60) + 's ago'}</div>` +
+      tip.innerHTML = `<div class="t">${r !== '10m' ? clock(best.t) : secs < 5 ? 'now' : secs < 60 ? secs + 's ago' : Math.floor(secs / 60) + 'm ' + (secs % 60) + 's ago'}</div>` +
         SERIES.filter(([k]) => best[k] != null).map(([k, label, v]) => `<div class="row" style="--c:var(${v})">${label} <b>${fmtPct(best[k])}</b>${k === 'cpu' && best.cpuTemp != null ? ' · ' + fmtTemp(best.cpuTemp) : ''}${k === 'gpu' && best.gpuTemp != null ? ' · ' + fmtTemp(best.gpuTemp) : ''}</div>`).join('');
       tip.style.display = 'block';
       const tw = tip.offsetWidth;
@@ -727,27 +729,24 @@ function renderGrid() {
 
 // ---------- offline devices ----------
 let offlineHtml = '';
-const offlineOpen = () => localStorage.getItem('offlineOpen') !== '0';
 const offlineDevices = () => [...devices.values()].filter(d => !d.online).sort((a, b) => ((a.order ?? 1e9) - (b.order ?? 1e9)) || (a.name || '').localeCompare(b.name || ''));
 function renderOffline(list = offlineDevices()) {
-  const box = $('#offlineList');
-  box.hidden = !list.length;
-  box.classList.toggle('collapsed', !offlineOpen());
-  const html = !list.length ? '' : `<button class="off-toggle" aria-expanded="${offlineOpen()}"><svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor"><path d="M1 3l4 4 4-4z"/></svg>Offline · ${list.length}</button>
-    <div class="off-rows">${list.map(d => `<div class="off-row" data-id="${esc(d.id)}" title="Open history">
-      <span class="dot"></span>
-      <div class="off-name"><b>${esc(d.name || d.hostname || d.id)}</b><span>${esc([d.os || d.platform, 'last seen ' + (d.lastSeen ? ago(d.lastSeen) : 'never'), versionLabel(d)].filter(Boolean).join(' · '))}</span></div>
+  $('#offWrap').hidden = !list.length;
+  if (!list.length) showOffline(false);
+  $('#offCount').textContent = list.length + ' offline';
+  $('#offBtn').title = list.map(d => d.name || d.hostname).join(', ');
+  const html = `<h5>Offline devices</h5>${list.map(d => `<div class="off-row" data-id="${esc(d.id)}" title="Open history">
+      <div><b>${esc(d.name || d.hostname || d.id)}</b><small>${esc(['last seen ' + (d.lastSeen ? ago(d.lastSeen) : 'never'), d.os || d.platform, versionLabel(d)].filter(Boolean).join(' · '))}</small></div>
       ${d.macs?.length ? '<button class="btn" data-a="wake" title="Send a Wake-on-LAN signal">Wake</button>' : '<span></span>'}
-      <button class="icon-btn" data-a="menu" title="Options" aria-label="Device options"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
-    </div>`).join('')}</div>`;
-  if (html !== offlineHtml) { box.innerHTML = html; offlineHtml = html; }   // only rebuilt when something changed
+      <button class="icon-btn" data-a="menu" title="Options" aria-label="Device options"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+    </div>`).join('')}`;
+  if (html !== offlineHtml) { $('#offPop').innerHTML = html; offlineHtml = html; }   // only rebuilt when something changed
 }
-$('#offlineList').addEventListener('click', async e => {
-  if (e.target.closest('.off-toggle')) {
-    localStorage.setItem('offlineOpen', offlineOpen() ? '0' : '1');
-    offlineHtml = ''; renderOffline();
-    return;
-  }
+function showOffline(open) { $('#offPop').hidden = !open; $('#offBtn').setAttribute('aria-expanded', open); }
+$('#offBtn').addEventListener('click', e => { e.stopPropagation(); showOffline($('#offPop').hidden); });
+document.addEventListener('click', e => { if (!e.target.closest('#offPop') && !e.target.closest('.menu')) showOffline(false); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') showOffline(false); });
+$('#offPop').addEventListener('click', async e => {
   const row = e.target.closest('.off-row'); if (!row) return;
   const id = row.dataset.id, btn = e.target.closest('[data-a]');
   if (btn?.dataset.a === 'menu') return openMenu(e, id, btn);
@@ -757,6 +756,7 @@ $('#offlineList').addEventListener('click', async e => {
     btn.textContent = r?.ok ? 'Sent ✓' : 'Failed';
     return;
   }
+  showOffline(false);
   location.hash = '#/history/' + encodeURIComponent(id);
 });
 
@@ -767,8 +767,8 @@ function connect() {
     const m = JSON.parse(ev.data);
     if (m.type === 'snapshot') {
       devices.clear(); series.clear();
-      for (const d of m.devices) { devices.set(d.id, d); if (range === '10m') series.set(d.id, { points: d.history || [], resolution: 2000 }); }
-      renderGrid(); if (range !== '10m') loadAllSeries();
+      for (const d of m.devices) { devices.set(d.id, d); if (rangeOf(d.id) === '10m') series.set(d.id, { points: d.history || [], resolution: 2000 }); }
+      renderGrid(); loadAllSeries(true);
       if (!$('#historyView').hidden) renderHvDevices();
     }
     else if (m.type === 'report') {
@@ -890,40 +890,38 @@ function copyFrom(btn, sel) {
 $('#copyBtn').addEventListener('click', e => copyFrom(e.currentTarget, '#cmd'));
 $('#copyView').addEventListener('click', e => copyFrom(e.currentTarget, '#viewUrl'));
 
-// ---------- card chart range (10 min / 60 min / 6 h) ----------
+// ---------- card chart range: each card has its own (10 min / 60 min / 6 h) ----------
 const RANGE_MS = { '10m': 10 * 60e3, '1h': 60 * 60e3, '6h': 6 * 3600e3 };
 const RANGE_LABEL = { '10m': 'last 10 min', '1h': 'last 60 min', '6h': 'last 6 hours' };
-let range = RANGE_MS[localStorage.getItem('range')] ? localStorage.getItem('range') : '10m';
-const series = new Map();   // id -> { points, resolution } for the selected card range
+const DEFAULT_RANGE = RANGE_MS[localStorage.getItem('range')] ? localStorage.getItem('range') : '10m';   // the old dashboard-wide setting
+const cardRanges = (() => { try { return JSON.parse(localStorage.getItem('cardRanges')) || {}; } catch { return {}; } })();
+const rangeOf = id => RANGE_MS[cardRanges[id]] ? cardRanges[id] : DEFAULT_RANGE;
+const series = new Map();   // id -> { points, resolution } for that card's range
 
+function setRange(id, r) {
+  if (!RANGE_MS[r]) return;
+  cardRanges[id] = r; localStorage.setItem('cardRanges', JSON.stringify(cardRanges));
+  series.delete(id); drawChart(id);
+  loadSeries(id);
+}
 async function loadSeries(id) {
-  const want = range;
+  const want = rangeOf(id);
   try {
     const r = await (await fetch(`/api/history/${encodeURIComponent(id)}?range=${want}&points=360`)).json();
-    if (want !== range || !r.points) return;
+    if (want !== rangeOf(id) || !r.points) return;
     series.set(id, { points: r.points, resolution: r.resolution });
     drawChart(id);
   } catch {}
 }
-function loadAllSeries() { for (const id of devices.keys()) loadSeries(id); }
+// Cards on 10 min get raw samples live; longer ranges are minute-averaged on the hub.
+function loadAllSeries(longOnly) { for (const id of devices.keys()) if (!longOnly || rangeOf(id) !== '10m') loadSeries(id); }
 function appendSample(id, sample) {
   const s = series.get(id) || (series.set(id, { points: [], resolution: 2000 }), series.get(id));
   s.points.push(sample);
-  const cutoff = Date.now() - RANGE_MS[range];
+  const cutoff = Date.now() - RANGE_MS[rangeOf(id)];
   while (s.points.length && s.points[0].t < cutoff) s.points.shift();
 }
-function syncRange() {
-  for (const b of $('#range').children) b.classList.toggle('on', b.dataset.r === range);
-  for (const el of document.querySelectorAll('.card .legend .range')) el.textContent = RANGE_LABEL[range];
-}
-$('#range').addEventListener('click', e => {
-  const b = e.target.closest('button'); if (!b) return;
-  range = b.dataset.r; localStorage.setItem('range', range); syncRange();
-  series.clear(); for (const id of devices.keys()) drawChart(id);
-  loadAllSeries();
-});
-// Longer ranges are minute-averaged on the hub; refresh them now and then.
-setInterval(() => { if (range !== '10m') loadAllSeries(); }, 2 * 60e3);
+setInterval(() => loadAllSeries(true), 2 * 60e3);
 
 const clock = t => new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 function timeLabel(t, span) {
@@ -1639,7 +1637,6 @@ $('#setUnit').addEventListener('click', e => {
 });
 syncUnit();
 window.addEventListener('resize', () => { for (const id of devices.keys()) drawChart(id); });
-syncRange();
 renderGrid();
 connect();
 route();
