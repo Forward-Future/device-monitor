@@ -1,7 +1,7 @@
 // Device Monitor desktop app (Electron).
 //  - "Host" mode: runs the hub on this PC (dashboard + API on port 7777) and monitors this PC.
 //  - "Connect" mode: monitors this PC, reports to a hub elsewhere, and shows that hub's dashboard.
-const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, clipboard, Notification, session } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, clipboard, Notification, session, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -38,9 +38,45 @@ function loadSettings() {
   try { settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8').trim()); } catch { settings = {}; }
 }
 function saveSettings() {
+  clearTimeout(saveSettingsTimer);
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-  fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
+  // Write a temporary file and swap it in, so a crash or power cut can't leave a half-written file.
+  const tmp = settingsFile + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2));
+  fs.renameSync(tmp, settingsFile);
 }
+let saveSettingsTimer = null;
+const saveSettingsSoon = () => { clearTimeout(saveSettingsTimer); saveSettingsTimer = setTimeout(saveSettings, 800); };
+
+// ---- Window size and position, kept across restarts ----
+// Only reused if it still lands on a connected screen (a monitor may have been unplugged).
+function savedBounds() {
+  const w = settings.window;
+  if (!w || TEST.DM_WINDOW_SIZE || ![w.x, w.y, w.width, w.height].every(Number.isFinite)) return {};
+  const onScreen = screen.getAllDisplays().some(({ workArea: a }) =>
+    Math.min(w.x + w.width, a.x + a.width) - Math.max(w.x, a.x) >= 120 && Math.min(w.y + 40, a.y + a.height) - Math.max(w.y, a.y) >= 20);
+  return onScreen ? { x: w.x, y: w.y, width: Math.max(560, w.width), height: Math.max(520, w.height) } : { width: w.width, height: w.height };
+}
+function rememberWindow() {
+  if (!win || win.isDestroyed() || win.isMinimized() || win.isFullScreen() || TEST.DM_WINDOW_SIZE) return;
+  settings.window = { ...win.getNormalBounds(), maximized: win.isMaximized() || pendingMaximize };   // still maximized if it was never shown
+  saveSettingsSoon();
+}
+
+// ---- Dashboard preferences (°C/°F, chart ranges…) ----
+// The dashboard keeps them in browser storage, which belongs to one hub address; a copy here
+// keeps them when the app reaches the hub another way (home network vs Tailscale).
+const PREF_KEY = /^[a-zA-Z]{1,32}$/;
+ipcMain.on('dm:prefs-get', e => { e.returnValue = isTrusted(e) ? settings.dashboardPrefs || {} : {}; });
+ipcMain.on('dm:pref-set', (e, k, v) => {
+  if (!isTrusted(e) || typeof k !== 'string' || !PREF_KEY.test(k)) return;
+  if (v != null && (typeof v !== 'string' || v.length > 20000)) return;
+  const prefs = settings.dashboardPrefs || (settings.dashboardPrefs = {});
+  if (prefs[k] === (v ?? undefined)) return;
+  if (v != null && !(k in prefs) && Object.keys(prefs).length >= 50) return;
+  if (v == null) delete prefs[k]; else prefs[k] = v;
+  saveSettingsSoon();
+});
 
 function normalizeHubUrl(input) {
   let s = String(input || '').trim();
@@ -217,7 +253,7 @@ function startupEnabled() {
 // ---------------------------------------------------------------------------
 function createWindow({ show }) {
   win = new BrowserWindow({
-    width: 1280, height: 860, minWidth: 560, minHeight: 520,
+    width: 1280, height: 860, minWidth: 560, minHeight: 520, ...savedBounds(),
     ...(TEST.DM_WINDOW_SIZE ? (([w, h]) => ({ width: +w, height: +h }))(TEST.DM_WINDOW_SIZE.split('x')) : {}),
     title: 'Device Monitor', icon: ICON, show: false, backgroundColor: '#0d0d0d',
     ...(IS_MAC
@@ -228,7 +264,10 @@ function createWindow({ show }) {
       contextIsolation: true, sandbox: true, nodeIntegration: false, webviewTag: false, spellcheck: false,
     },
   });
-  win.once('ready-to-show', () => { if (show) win.show(); });
+  // maximize() also shows the window, so a hidden start keeps it for the first showWindow().
+  pendingMaximize = !!settings.window?.maximized && !TEST.DM_WINDOW_SIZE;
+  win.once('ready-to-show', () => { if (show) showWindow(); });
+  for (const ev of ['resize', 'move', 'maximize', 'unmaximize']) win.on(ev, rememberWindow);
   if (TEST.DM_SCREENSHOT) {
     win.webContents.on('did-finish-load', () => setTimeout(async () => {
       if (TEST.DM_TEST_JS) await win.webContents.executeJavaScript(TEST.DM_TEST_JS).catch(e => console.error(e));
@@ -237,6 +276,7 @@ function createWindow({ show }) {
     }, Number(TEST.DM_SCREENSHOT_DELAY) || 6000));
   }
   win.on('close', e => {
+    rememberWindow(); saveSettings();
     if (quitting) return;
     e.preventDefault();
     win.hide();
@@ -246,7 +286,7 @@ function createWindow({ show }) {
     }
   });
   // A downloaded update waits while the window is on screen; closing it to the tray lets it install.
-  win.on('hide', () => setTimeout(() => updater?.maybeInstall(), 1500));
+  win.on('hide', () => { session.defaultSession.flushStorageData(); setTimeout(() => updater?.maybeInstall(), 1500); });
   // The window only ever shows the app's own pages or the configured dashboard; anything else
   // (links, redirects, popups) goes to the default browser, and only if it's a web URL.
   win.webContents.setWindowOpenHandler(({ url }) => { openExternalSafe(url); return { action: 'deny' }; });
@@ -275,9 +315,11 @@ function loadMain() {
   }).then(go, go);
 }
 
+let pendingMaximize = false;
 function showWindow() {
   if (!win) return createWindow({ show: true });
   if (win.isMinimized()) win.restore();
+  if (pendingMaximize) { pendingMaximize = false; win.maximize(); }
   win.show(); win.focus();
 }
 
@@ -463,7 +505,11 @@ if (!app.requestSingleInstanceLock()) {
     const hidden = process.argv.includes('--hidden') || (atLogin && settings.startMinimized === true);
     createWindow({ show: !(hidden && settings.mode) });
   });
-  app.on('before-quit', () => { quitting = true; updater?.stop(); stopServices(); });
+  app.on('before-quit', () => {
+    quitting = true; updater?.stop(); stopServices();
+    rememberWindow(); session.defaultSession.flushStorageData();
+    try { if (settingsFile) saveSettings(); } catch {}
+  });
   app.on('dm-quit-for-update', () => { quitting = true; app.quit(); });
   app.on('window-all-closed', () => { /* keep running in the tray */ });
 }

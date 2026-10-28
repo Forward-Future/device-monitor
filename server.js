@@ -10,6 +10,7 @@ const discovery = require('./discovery');
 const { HistoryStore } = require('./history');
 const power = require('./power');
 const { Alerts } = require('./alerts');
+const { readJson, writeJson } = require('./safe-json');
 const tailscale = require('./tailscale');
 const sec = require('./security');
 
@@ -30,10 +31,6 @@ const STATIC = {
   '/js/alerts.js': ['alerts.js', 'text/javascript; charset=utf-8'],
   '/js/tools.js': ['tools.js', 'text/javascript; charset=utf-8'],
 };
-
-function readJson(file, fallback) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
-}
 
 function lanAddresses() {
   const out = [];
@@ -90,7 +87,7 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 const config = readJson(CONFIG_FILE, {});
 if (!config.token) {
   config.token = crypto.randomBytes(12).toString('hex');
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+  writeJson(CONFIG_FILE, config);
 }
 
 // id -> { id, name, hostname, platform, firstSeen, lastSeen }
@@ -105,7 +102,7 @@ const procWatch = new Map();  // id -> time until which the device should send i
 let saveTimer = null;
 function saveRegistry() {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => fs.writeFile(DEVICES_FILE, JSON.stringify(registry, null, 2), () => {}), 1000);
+  saveTimer = setTimeout(() => { saveTimer = null; writeJson(DEVICES_FILE, registry); }, 1000);
 }
 
 function deviceView(id) {
@@ -448,7 +445,7 @@ const server = http.createServer(async (req, res) => {
       const s = validEnergySettings(await readBody(req));
       if (!s) return send(res, 400, { error: 'invalid settings' });
       config.energy = s;
-      fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2));
+      writeJson(CONFIG_FILE, config);
       broadcast({ type: 'energySettings', settings: s });
       return send(res, 200, s);
     }
@@ -460,7 +457,7 @@ const server = http.createServer(async (req, res) => {
       return s ? send(res, 200, { settings: s, active: alerts.active() }) : send(res, 400, { error: 'invalid alert settings' });
     }
     if (req.method === 'POST' && p === '/api/alerts/test') return send(res, 200, await alerts.test());
-    if (req.method === 'DELETE' && p === '/api/alerts/log') { alerts.events = []; fs.writeFile(path.join(DATA_DIR, 'alerts-log.json'), '[]', () => {}); return send(res, 200, { ok: true }); }
+    if (req.method === 'DELETE' && p === '/api/alerts/log') { alerts.events = []; writeJson(path.join(DATA_DIR, 'alerts-log.json'), [], 0); return send(res, 200, { ok: true }); }
     if (req.method === 'GET' && p === '/api/remote') {
       remote = await tailscale.status(PORT, { fresh: url.searchParams.has('fresh') });
       return send(res, 200, { ...remote, port: PORT, canConfigure: isLoopback(req), platform: process.platform });
@@ -543,7 +540,7 @@ return new Promise((resolve, reject) => {
     const responder = discovery.respond({ port: PORT });
     resolve({
       port: PORT, token: config.token, addresses: lanAddresses(),
-      close: () => { alerts.close(); clearInterval(remoteTimer); downloadsWatch?.close(); clearTimeout(watchTimer); history.close(); responder.close(); clearInterval(statusTimer); for (const c of clients) c.destroy(); server.close(); },
+      close: () => { if (saveTimer) { clearTimeout(saveTimer); writeJson(DEVICES_FILE, registry); } alerts.close(); clearInterval(remoteTimer); downloadsWatch?.close(); clearTimeout(watchTimer); history.close(); responder.close(); clearInterval(statusTimer); for (const c of clients) c.destroy(); server.close(); },
     });
   });
 });

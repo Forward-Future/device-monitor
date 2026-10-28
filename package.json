@@ -1,7 +1,7 @@
 {
   "name": "device-monitor",
   "productName": "Device Monitor",
-  "version": "1.2.25",
+  "version": "1.2.26",
   "description": "Monitor CPU, GPU, memory and temperatures across all your devices",
   "main": "main.js",
   "author": "Matt",
@@ -34,6 +34,7 @@
       "security.js",
       "power.js",
       "alerts.js",
+      "safe-json.js",
       "tailscale.js",
       "updater.js",
       "build/update-key.pub.pem"

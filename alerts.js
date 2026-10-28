@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { readJson, writeJson } = require('./safe-json');
 
 // threshold: [min, max]; hyst: how far a value must fall back below the threshold to count as resolved.
 const TYPES = {
@@ -80,11 +81,11 @@ class Alerts {
     Object.assign(this, { broadcast, devices, latest, costToday, hubUrl, log });
     this.file = path.join(dataDir, 'alerts.json');
     this.logFile = path.join(dataDir, 'alerts-log.json');
-    let saved = null;
-    try { saved = JSON.parse(fs.readFileSync(this.file, 'utf8')); } catch {}
+    const saved = readJson(this.file, null);
     this.cfg = (saved && validSettings(saved.settings || saved)) ||
       validSettings({ rules: DEFAULT_RULES, channels: { desktop: true } });
-    try { this.events = JSON.parse(fs.readFileSync(this.logFile, 'utf8')).slice(-MAX_LOG); } catch { this.events = []; }
+    const savedLog = readJson(this.logFile, []);
+    this.events = Array.isArray(savedLog) ? savedLog.slice(-MAX_LOG) : [];
     // "<ruleId>|<deviceId>" -> { since, firing, firedAt, value, detail }
     this.state = new Map(Object.entries(saved?.firing || {}).map(([k, v]) => [k, { since: v.firedAt, firing: true, firedAt: v.firedAt, value: v.value, detail: v.detail }]));
     this.started = Date.now();
@@ -117,7 +118,7 @@ class Alerts {
 
   save() {
     const firing = Object.fromEntries([...this.state].filter(([, st]) => st.firing).map(([k, st]) => [k, { firedAt: st.firedAt, value: st.value, detail: st.detail }]));
-    fs.writeFile(this.file, JSON.stringify({ settings: this.cfg, firing }, null, 2), () => {});
+    writeJson(this.file, { settings: this.cfg, firing });
   }
 
   targets(rule) {
@@ -242,7 +243,7 @@ class Alerts {
     this.events.push(ev);
     if (this.events.length > MAX_LOG) this.events.splice(0, this.events.length - MAX_LOG);
     clearTimeout(this.logTimer);
-    this.logTimer = setTimeout(() => fs.writeFile(this.logFile, JSON.stringify(this.events), () => {}), 1000);
+    this.logTimer = setTimeout(() => writeJson(this.logFile, this.events, 0), 1000);
     this.save();
     const notify = state === 'firing' || this.cfg.notifyResolved;
     this.broadcast({ type: 'alert', event: ev, notify: notify && this.cfg.channels.desktop, active: this.active() });

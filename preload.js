@@ -18,6 +18,9 @@ contextBridge.exposeInMainWorld('deviceMonitorApp', {
   setAutoUpdate: on => ipcRenderer.invoke('dm:set-auto-update', !!on),
   installUpdate: () => ipcRenderer.invoke('dm:install-update'),
   onUpdateStatus: cb => { ipcRenderer.on('dm:update-status', (_e, status) => cb(status)); },
+  // Dashboard preferences kept by the app (read once, synchronously, before the page's script runs).
+  prefs: (() => { try { return ipcRenderer.sendSync('dm:prefs-get'); } catch { return null; } })(),
+  setPref: (k, v) => ipcRenderer.send('dm:pref-set', String(k), v == null ? null : String(v)),
 });
 
 // Lets pages make room for the native window buttons and drag the window by its header.

@@ -380,9 +380,24 @@
 
 <script>
 const $ = (s, el = document) => el.querySelector(s);
+// Preferences live in browser storage; the desktop app keeps a copy too, so they survive the app
+// reaching the hub at a different address (each address has its own storage).
+const PREF_KEYS = ['unit', 'range', 'cardRanges', 'hvRange', 'advRange', 'setAdvOpen'];
+const store = {
+  get: k => localStorage.getItem(k),
+  set(k, v) { localStorage.setItem(k, v); window.deviceMonitorApp?.setPref?.(k, v); },
+};
+(() => {
+  const app = window.deviceMonitorApp?.prefs;
+  if (!app) return;
+  for (const k of PREF_KEYS) {
+    if (app[k] != null) localStorage.setItem(k, app[k]);
+    else if (localStorage.getItem(k) != null) window.deviceMonitorApp.setPref(k, localStorage.getItem(k));   // first run with this version
+  }
+})();
 const devices = new Map();          // id -> device view
 const cards = new Map();            // id -> { el, refs }
-let unit = localStorage.getItem('unit') || 'C';
+let unit = store.get('unit') || 'C';
 let info = null;
 
 // ---------- formatting ----------
@@ -925,14 +940,14 @@ $('#copyView').addEventListener('click', e => copyFrom(e.currentTarget, '#viewUr
 // ---------- card chart range: each card has its own (10 min / 60 min / 6 h) ----------
 const RANGE_MS = { '10m': 10 * 60e3, '1h': 60 * 60e3, '6h': 6 * 3600e3 };
 const RANGE_LABEL = { '10m': 'last 10 min', '1h': 'last 60 min', '6h': 'last 6 hours' };
-const DEFAULT_RANGE = RANGE_MS[localStorage.getItem('range')] ? localStorage.getItem('range') : '10m';   // the old dashboard-wide setting
-const cardRanges = (() => { try { return JSON.parse(localStorage.getItem('cardRanges')) || {}; } catch { return {}; } })();
+const DEFAULT_RANGE = RANGE_MS[store.get('range')] ? store.get('range') : '10m';   // the old dashboard-wide setting
+const cardRanges = (() => { try { return JSON.parse(store.get('cardRanges')) || {}; } catch { return {}; } })();
 const rangeOf = id => RANGE_MS[cardRanges[id]] ? cardRanges[id] : DEFAULT_RANGE;
 const series = new Map();   // id -> { points, resolution } for that card's range
 
 function setRange(id, r) {
   if (!RANGE_MS[r]) return;
-  cardRanges[id] = r; localStorage.setItem('cardRanges', JSON.stringify(cardRanges));
+  cardRanges[id] = r; store.set('cardRanges', JSON.stringify(cardRanges));
   series.delete(id); drawChart(id);
   loadSeries(id);
 }
@@ -972,7 +987,7 @@ const HV_CHARTS = [
   { title: 'Network', series: [['rx', 'Download', '--cpu'], ['tx', 'Upload', '--gpu']], fmt: fmtRate, axis: v => fmtBytes(v, 0) + '/s' },
   { title: 'Disk I/O', series: [['dr', 'Read', '--cpu'], ['dw', 'Write', '--gpu']], fmt: fmtRate, axis: v => fmtBytes(v, 0) + '/s' },
 ];
-const hv = { id: null, range: localStorage.getItem('hvRange') || '6h', from: 0, to: 0, zoomed: false, points: [], resolution: 60e3, hoverT: null, drag: null, charts: [], timer: null, seq: 0 };
+const hv = { id: null, range: store.get('hvRange') || '6h', from: 0, to: 0, zoomed: false, points: [], resolution: 60e3, hoverT: null, drag: null, charts: [], timer: null, seq: 0 };
 if (!HV_RANGES[hv.range]) hv.range = '6h';
 
 function route() {
@@ -1028,7 +1043,7 @@ function renderHvDevices() {
 $('#hvDevices').addEventListener('click', e => { const b = e.target.closest('button'); if (b) location.hash = '#/history/' + encodeURIComponent(b.dataset.id); });
 $('#hvRange').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
-  hv.range = b.dataset.r; localStorage.setItem('hvRange', hv.range); hv.zoomed = false; setHvWindow(); renderHvDevices(); loadHistory();
+  hv.range = b.dataset.r; store.set('hvRange', hv.range); hv.zoomed = false; setHvWindow(); renderHvDevices(); loadHistory();
 });
 $('#hvReset').addEventListener('click', () => { hv.zoomed = false; setHvWindow(); renderHvDevices(); loadHistory(); });
 
@@ -1533,7 +1548,7 @@ $('#setCurrency').addEventListener('change', e => {
 fetch('/api/energy/settings').then(r => r.json()).then(s => { energy.saved = s; renderPriceRow(); }).catch(() => renderPriceRow());
 
 // ---------- advanced page: power, cost and usage totals ----------
-const adv = { range: localStorage.getItem('advRange') || '7d', data: null, timer: null, seq: 0, hover: null, live: null };
+const adv = { range: store.get('advRange') || '7d', data: null, timer: null, seq: 0, hover: null, live: null };
 if (!['24h', '7d', '30d'].includes(adv.range)) adv.range = '7d';
 const DEVICE_COLORS = ['--cpu', '--gpu', '--mem', '--accent', '--warning', '--serious', '#4fb3bf', '#c97fd0'];
 const cssColor = c => c.startsWith('--') ? `var(${c})` : c;
@@ -1556,7 +1571,7 @@ function closeAdvanced() {
 }
 $('#advRange').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
-  adv.range = b.dataset.r; localStorage.setItem('advRange', adv.range); adv.data = null; renderAdv(); loadAdv();
+  adv.range = b.dataset.r; store.set('advRange', adv.range); adv.data = null; renderAdv(); loadAdv();
 });
 
 // Bucket edges in local time: hours for 24 h, days (midnight to midnight) otherwise.
@@ -1658,6 +1673,8 @@ function renderAdv() {
   $('#advLegend').innerHTML = rows.filter(r => r.s?.wh).map(r => `<span style="--c:${cssColor(r.color)}">${esc(r.d.name)}</span>`).join('');
   drawAdvChart();
 }
+$('#setAdv').open = store.get('setAdvOpen') === '1';
+$('#setAdv').addEventListener('toggle', e => store.set('setAdvOpen', e.target.open ? '1' : '0'));
 $('#advPrice').addEventListener('click', e => { if (e.target.closest('#advPriceBtn')) openSettings().then(() => { $('#setAdv').open = true; $('#setPriceMode .on')?.focus(); }); });
 
 function advBucketLabel(i, long) {
@@ -1724,7 +1741,7 @@ window.addEventListener('resize', () => { if (!$('#advView').hidden) drawAdvChar
 function syncUnit() { for (const b of document.querySelectorAll('#setUnit button')) b.classList.toggle('on', b.dataset.u === unit); }
 $('#setUnit').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
-  unit = b.dataset.u; localStorage.setItem('unit', unit); syncUnit(); renderGrid();
+  unit = b.dataset.u; store.set('unit', unit); syncUnit(); renderGrid();
   if (!$('#historyView').hidden) { renderTiles(); drawHv(); }
   renderAdv();
 });
