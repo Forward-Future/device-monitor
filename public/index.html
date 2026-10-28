@@ -253,6 +253,9 @@
   #settingsDlg { width: min(520px, calc(100vw - 24px)); }
   .set-section { border-top: 1px solid var(--border); padding: 6px 0; }
   .set-section:first-of-type { margin-top: 14px; }
+  .set-adv { border-top: 1px solid var(--border); padding-top: 12px; }
+  .set-adv > summary { font-size: 13px; }
+  .set-adv .set-section { border-top: 0; margin-top: 4px; }
   .set-row { display: flex; align-items: center; gap: 16px; padding: 10px 0; }
   .set-row[hidden] { display: none; }
   .set-text { flex: 1; min-width: 0; }
@@ -346,9 +349,6 @@
   <h3>Settings</h3>
   <div class="set-section">
     <div class="set-row"><div class="set-text"><div class="set-k">Temperature unit</div></div><div class="seg" id="setUnit"><button data-u="C">°C</button><button data-u="F">°F</button></div></div>
-    <div class="set-row wrap"><div class="set-text"><div class="set-k">Electricity price</div><div class="set-v hint" id="setPriceHint"></div></div><div class="set-price"><select id="setRegion" aria-label="Where you live"></select><input id="setRate" type="number" min="0" step="0.001" inputmode="decimal" aria-label="Price per kWh"><select id="setCurrency" aria-label="Currency"></select><span class="hint">per kWh</span></div></div>
-    <div class="set-row wrap"><div class="set-text"><div class="set-k">Time-of-use rates</div><div class="set-v hint">Different prices for certain hours, like peak and partial-peak. The rate above covers all other hours.</div></div>
-      <div class="tou"><div id="setTou" class="tou"></div><button class="btn tou-add" id="setTouAdd">+ Add time period</button></div></div>
   </div>
   <div class="set-section app-only">
     <div class="set-row"><div class="set-text"><div class="set-k">This computer</div><div class="set-v" id="setRole"></div></div><button class="btn" id="setChange">Change setup…</button></div>
@@ -361,6 +361,13 @@
     <label class="set-row" for="setStartup"><div class="set-text"><div class="set-k">Start when I sign in</div><div class="set-v hint">Opens Device Monitor when you sign in, so this computer is always reporting.</div></div><input type="checkbox" id="setStartup" class="switch"></label>
     <label class="set-row" for="setStartMin" id="setStartMinRow" hidden><div class="set-text"><div class="set-k">Start minimized to the tray</div><div class="set-v hint">Monitor in the background without opening the window at sign-in.</div></div><input type="checkbox" id="setStartMin" class="switch"></label>
   </div>
+  <details class="set-adv" id="setAdv"><summary>Advanced settings</summary>
+  <div class="set-section">
+    <div class="set-row wrap"><div class="set-text"><div class="set-k">Electricity price</div><div class="set-v hint" id="setPriceHint"></div></div><div class="set-price"><select id="setRegion" aria-label="Where you live"></select><input id="setRate" type="number" min="0" step="0.001" inputmode="decimal" aria-label="Price per kWh"><select id="setCurrency" aria-label="Currency"></select><span class="hint">per kWh</span></div></div>
+    <div class="set-row wrap"><div class="set-text"><div class="set-k">Time-of-use rates</div><div class="set-v hint">Different prices for certain hours, like peak and partial-peak. The rate above covers all other hours.</div></div>
+      <div class="tou"><div id="setTou" class="tou"></div><button class="btn tou-add" id="setTouAdd">+ Add time period</button></div></div>
+  </div>
+  </details>
   <div class="dlg-foot"><span class="hint app-only" id="setVersion"></span><span class="spacer"></span><button class="btn app-only" id="setQuit">Quit app</button><button class="btn primary" id="setDone" autofocus>Done</button></div>
 </dialog>
 
@@ -1628,7 +1635,7 @@ function renderAdv() {
   $('#advLegend').innerHTML = rows.filter(r => r.s?.wh).map(r => `<span style="--c:${cssColor(r.color)}">${esc(r.d.name)}</span>`).join('');
   drawAdvChart();
 }
-$('#advPrice').addEventListener('click', e => { if (e.target.closest('#advPriceBtn')) openSettings().then(() => $('#setRegion').focus()); });
+$('#advPrice').addEventListener('click', e => { if (e.target.closest('#advPriceBtn')) openSettings().then(() => { $('#setAdv').open = true; $('#setRegion').focus(); }); });
 
 function advBucketLabel(i, long) {
   const b = adv.data.bounds, d = new Date(b[i]);
