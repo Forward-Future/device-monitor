@@ -46,12 +46,10 @@
   header .btn { display: inline-flex; align-items: center; gap: 6px; height: 34px; }
   header .seg button { height: 32px; }
   .short { display: none; }
-  @media (max-width: 1000px) { .summary { display: none; } }
   @media (max-width: 860px) { header .full { display: none; } header .short { display: inline; } header { gap: 10px; } }
   @media (max-width: 660px) { .logo-text { display: none; } }
   @media (max-width: 400px) { header { gap: 8px; padding-left: 10px; padding-right: 10px; } header .seg button { padding: 6px 7px; } header .btn { padding: 7px 9px; } }
   /* In the app window the caption buttons take ~150px on the right, so compact a bit sooner. */
-  @media (max-width: 1150px) { .app-window .summary { display: none; } }
   @media (max-width: 1010px) { .app-window header .full { display: none; } .app-window header .short { display: inline; } .app-window header { gap: 10px; } }
   @media (max-width: 810px) { .app-window .logo-text { display: none; } }
   .spacer { flex: 1; }
@@ -76,7 +74,7 @@
   .app-window.platform-win32::-webkit-scrollbar-track { margin-top: 65px; }
   .app-window.platform-win32::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.16); border: 3px solid transparent; border-radius: 6px; background-clip: padding-box; }
   .app-window.platform-win32::-webkit-scrollbar-thumb:hover { background-color: rgba(255,255,255,0.28); }
-  @media (max-width: 520px) { main { padding: 12px; grid-template-columns: 1fr; } header { padding: 12px; gap: 10px; } .summary { display: none; } }
+  @media (max-width: 520px) { main { padding: 12px; grid-template-columns: 1fr; } header { padding: 12px; gap: 10px; } }
 
   .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 15px 18px 13px; display: flex; flex-direction: column; gap: 12px; }
   .card.offline { opacity: 0.55; }
@@ -148,12 +146,6 @@
   .empty { grid-column: 1 / -1; text-align: center; padding: 80px 20px; color: var(--text-secondary); }
   .empty.small { padding: 28px 20px; font-size: 13px; }
   /* Offline devices: a small button in the header opens the list. */
-  .off-wrap { display: none; }
-  @media (max-width: 1000px) { .off-wrap:not([hidden]) { display: block; } }
-  @media (min-width: 1001px) and (max-width: 1150px) { .app-window .off-wrap:not([hidden]) { display: block; } }
-  .off-btn { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; border-radius: 99px; border: 1px solid var(--border); background: none; color: var(--text-secondary); font-size: 12px; }
-  .off-btn:hover, .off-btn[aria-expanded="true"] { background: var(--surface-2); color: var(--text-primary); }
-  .off-btn i { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
   .off-pop { position: fixed; width: 300px; max-height: 60vh; overflow-y: auto; background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px; padding: 4px; box-shadow: 0 12px 36px rgba(0,0,0,.55); z-index: 8; white-space: normal; -webkit-app-region: no-drag; }
   .off-pop h5 { margin: 6px 10px 4px; font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: .08em; }
   .off-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px; padding: 7px 4px 7px 10px; border-radius: 8px; cursor: pointer; }
@@ -234,6 +226,11 @@
   .set-price { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
   .set-price input { width: 84px; background: var(--surface-2); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font: inherit; text-align: right; }
   #setRegion { max-width: 220px; }
+  .tou { display: flex; flex-direction: column; gap: 6px; flex-basis: 100%; }
+  .tou .set-price { justify-content: flex-start; flex-wrap: nowrap; }
+  .tou select { min-width: 0; }
+  .tou .bad select, .tou .bad input { border-color: var(--danger, #e5484d); }
+  .tou-add { align-self: flex-start; }
   .set-row.wrap { flex-wrap: wrap; row-gap: 8px; }
   .set-row.wrap .set-price { flex-basis: 100%; justify-content: flex-start; }
   @media (max-width: 520px) { #advView { padding: 12px; } }
@@ -283,11 +280,8 @@
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4M7 12l3-3 2 2 4-4"/></svg>
     <span class="logo-text">Device Monitor</span>
   </div>
-  <button class="summary" id="summary" aria-haspopup="true" aria-expanded="false"><span id="summaryText"></span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
+  <button class="summary" id="summary" aria-haspopup="true" aria-expanded="false"><span id="summaryText"></span><span class="short" id="summaryShort"></span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
   <div class="spacer"></div>
-  <div class="off-wrap" id="offWrap" hidden>
-    <button class="off-btn" id="offBtn" aria-haspopup="true" aria-expanded="false"><i></i><span id="offCount"></span></button>
-  </div>
   <button class="btn view-btn" id="historyBtn" title="History" aria-label="History" aria-pressed="false"><svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg></button>
   <button class="btn view-btn" id="advBtn" title="Advanced: power, electricity cost and usage totals" aria-label="Advanced" aria-pressed="false"><svg class="ico" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg></button>
   <button class="btn primary" id="addBtn" title="Add device" aria-label="Add device"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>
@@ -353,6 +347,8 @@
   <div class="set-section">
     <div class="set-row"><div class="set-text"><div class="set-k">Temperature unit</div></div><div class="seg" id="setUnit"><button data-u="C">°C</button><button data-u="F">°F</button></div></div>
     <div class="set-row wrap"><div class="set-text"><div class="set-k">Electricity price</div><div class="set-v hint" id="setPriceHint"></div></div><div class="set-price"><select id="setRegion" aria-label="Where you live"></select><input id="setRate" type="number" min="0" step="0.001" inputmode="decimal" aria-label="Price per kWh"><select id="setCurrency" aria-label="Currency"></select><span class="hint">per kWh</span></div></div>
+    <div class="set-row wrap"><div class="set-text"><div class="set-k">Time-of-use rates</div><div class="set-v hint">Different prices for certain hours, like peak and partial-peak. The rate above covers all other hours.</div></div>
+      <div class="tou"><div id="setTou" class="tou"></div><button class="btn tou-add" id="setTouAdd">+ Add time period</button></div></div>
   </div>
   <div class="set-section app-only">
     <div class="set-row"><div class="set-text"><div class="set-k">This computer</div><div class="set-v" id="setRole"></div></div><button class="btn" id="setChange">Change setup…</button></div>
@@ -734,18 +730,17 @@ function renderGrid() {
   renderOffline(list.filter(d => !d.online));
   const on = list.filter(d => d.online).length;
   $('#summaryText').textContent = list.length ? `${on} of ${list.length} device${list.length === 1 ? '' : 's'} online` : '';
+  $('#summaryShort').textContent = list.length ? `${on}/${list.length} online` : '';
+  $('#summaryText').classList.toggle('full', !!list.length);   // narrow windows show the short form
 }
 
 // ---------- offline devices ----------
 let offlineHtml = '';
 const offlineDevices = () => [...devices.values()].filter(d => !d.online).sort((a, b) => ((a.order ?? 1e9) - (b.order ?? 1e9)) || (a.name || '').localeCompare(b.name || ''));
 function renderOffline(list = offlineDevices()) {
-  $('#offWrap').hidden = !list.length;
   $('#summary').classList.toggle('has-off', !!list.length);
   $('#summary').title = list.length ? 'Show offline devices' : '';
   if (!list.length) showOffline(false);
-  $('#offCount').textContent = list.length + ' offline';
-  $('#offBtn').title = list.map(d => d.name || d.hostname).join(', ');
   const html = `<h5>Offline devices</h5>${list.map(d => `<div class="off-row" data-id="${esc(d.id)}" title="Open history">
       <div><b>${esc(d.name || d.hostname || d.id)}</b><small>${esc(['last seen ' + (d.lastSeen ? ago(d.lastSeen) : 'never'), d.os || d.platform, versionLabel(d)].filter(Boolean).join(' · '))}</small></div>
       ${d.macs?.length ? '<button class="btn" data-a="wake" title="Send a Wake-on-LAN signal">Wake</button>' : '<span></span>'}
@@ -753,23 +748,19 @@ function renderOffline(list = offlineDevices()) {
     </div>`).join('')}`;
   if (html !== offlineHtml) { $('#offPop').innerHTML = html; offlineHtml = html; }   // only rebuilt when something changed
 }
-// One list, opened from the summary text ("3 of 4 devices online") or, when that's hidden for space, the "N offline" pill.
-let offAnchor = null;
-function showOffline(open, anchor = offAnchor) {
-  const pop = $('#offPop');
-  for (const b of [$('#summary'), $('#offBtn')]) b.setAttribute('aria-expanded', open && b === anchor);
+// The summary text ("3 of 4 devices online") opens the offline list.
+function showOffline(open) {
+  const pop = $('#offPop'), sum = $('#summary');
+  sum.setAttribute('aria-expanded', open);
   pop.hidden = !open;
-  offAnchor = open ? anchor : null;
-  if (!open || !anchor) return;
-  const r = anchor.getBoundingClientRect(), w = pop.offsetWidth;
-  const left = anchor.id === 'summary' ? r.left : r.right - w;     // summary sits on the left, the pill on the right
-  pop.style.left = Math.max(8, Math.min(left, innerWidth - w - 8)) + 'px';
+  if (!open) return;
+  const r = sum.getBoundingClientRect(), w = pop.offsetWidth;
+  pop.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px';
   pop.style.top = r.bottom + 8 + 'px';
 }
-for (const b of [$('#summary'), $('#offBtn')]) b.addEventListener('click', e => {
+$('#summary').addEventListener('click', e => {
   e.stopPropagation();
-  if (!offlineDevices().length) return;
-  showOffline(offAnchor !== b, b);
+  if (offlineDevices().length) showOffline($('#offPop').hidden);
 });
 addEventListener('resize', () => showOffline(false));
 document.addEventListener('click', e => { if (!e.target.closest('#offPop') && !e.target.closest('.menu')) showOffline(false); });
@@ -814,7 +805,7 @@ function connect() {
       if (appApi?.checkForUpdates) appApi.checkForUpdates().then(renderUpdateButton).catch(() => {});
     }
     else if (m.type === 'paired') { if ($('#addDlg').open && osTab === 'app') showPairCode(); }
-    else if (m.type === 'energySettings') { energy.saved = m.settings; renderPriceRow(); renderAdv(); }
+    else if (m.type === 'energySettings') { energy.saved = m.settings; renderPriceRow(); if (!$('#advView').hidden) loadAdv(); }
     else if (m.type === 'order') { for (const [id, o] of Object.entries(m.order)) { const d = devices.get(id); if (d) d.order = o; } renderGrid(); }
     else if (m.type === 'status') {
       let changed = false;
@@ -825,7 +816,7 @@ function connect() {
     }
   };
   es.onerror = () => {
-    $('#summaryText').textContent = 'Reconnecting to hub…';
+    $('#summaryText').textContent = 'Reconnecting to hub…'; $('#summaryText').classList.remove('full'); $('#summaryShort').textContent = '';
     fetch('/api/info').then(r => r.json()).then(i => { if (i.locked) location.reload(); }).catch(() => {});
   };
 }
@@ -1427,11 +1418,20 @@ function money(v, cur = priceSettings().currency, frac) {
   try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: cur, minimumFractionDigits: f, maximumFractionDigits: f }).format(v); }
   catch { return v.toFixed(f) + ' ' + cur; }
 }
-const fmtPrice = s => money(s.rate, s.currency, s.rate < 1 ? 3 : 2) + '/kWh';
+const fmtKwhPrice = (r, cur) => money(r, cur, r < 1 ? 3 : 2);
+function fmtPrice(s) {
+  if (!s.tou?.length) return fmtKwhPrice(s.rate, s.currency) + '/kWh';
+  const rates = [s.rate, ...s.tou.map(p => p.rate)];
+  return `${fmtKwhPrice(Math.min(...rates), s.currency)}–${fmtKwhPrice(Math.max(...rates), s.currency)}/kWh by time of day`;
+}
+// Average price over a day, weighting each time-of-use period by its hours.
+const dayRate = s => s.rate + (s.tou || []).reduce((a, p) => a + (p.to - p.from) * (p.rate - s.rate), 0) / 24;
+const fmtHour = h => h === 24 ? 'midnight' : h === 12 ? 'noon' : `${h % 12 || 12}${h % 1 ? ':' + String((h % 1) * 60).padStart(2, '0') : ''} ${h < 12 ? 'am' : 'pm'}`;
 const fmtW = w => w == null ? '–' : w >= 1000 ? (w / 1000).toFixed(2) + ' kW' : Math.round(w) + ' W';
 const fmtKwh = k => (k == null ? '–' : k < 10 ? k.toFixed(2) : k < 100 ? k.toFixed(1) : Math.round(k).toLocaleString()) + ' kWh';
 
 function priceSource(s) {
+  if (s.tou?.length) return 'Your time-of-use rates.';
   if (s.guessed) return `Typical home rate for ${regionName(s.region)}, guessed from this device's time zone.`;
   if (s.region !== 'custom' && PRICE_REGIONS[s.region]?.[2] === s.rate) return `Typical home rate for ${regionName(s.region)}.`;
   return 'The rate you entered.';
@@ -1447,28 +1447,58 @@ function renderPriceRow() {
   }
   sel.value = s.region; cur.value = s.currency;
   if (document.activeElement !== $('#setRate')) $('#setRate').value = s.rate;
-  $('#setPriceHint').textContent = priceSource(s) + (s.guessed ? ' Pick your area, or enter the rate from your bill.' : ' Enter the rate from your bill for a better estimate.');
+  $('#setPriceHint').textContent = s.tou?.length ? 'The price for hours outside your time-of-use periods (off-peak).'
+    : priceSource(s) + (s.guessed ? ' Pick your area, or enter the rate from your bill.' : ' Enter the rate from your bill for a better estimate.');
+  if (!$('#setTou').contains(document.activeElement)) renderTou(s.tou || []);
 }
+function renderTou(list) {
+  const opts = (v, from) => Array.from({ length: 24 }, (_, i) => i + (from ? 0 : 1))
+    .map(h => `<option value="${h}"${h === v ? ' selected' : ''}>${fmtHour(h)}</option>`).join('');
+  $('#setTou').innerHTML = list.map(p => `<div class="set-price">
+    <select data-k="from" aria-label="From">${opts(p.from, true)}</select><span class="hint">to</span>
+    <select data-k="to" aria-label="To">${opts(p.to, false)}</select>
+    <input data-k="rate" type="number" min="0" step="0.001" inputmode="decimal" value="${p.rate}" aria-label="Price per kWh"><span class="hint">per kWh</span>
+    <button class="icon-btn" data-k="del" title="Remove" aria-label="Remove"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`).join('');
+}
+function saveTou() {
+  const rows = [...$('#setTou').children], tou = [];
+  for (const r of rows) {
+    const p = { from: +$('[data-k=from]', r).value, to: +$('[data-k=to]', r).value, rate: parseFloat($('[data-k=rate]', r).value) };
+    const ok = p.from < p.to && p.rate > 0 && p.rate <= 1000;
+    r.classList.toggle('bad', !ok);
+    if (ok) tou.push(p);
+  }
+  if (tou.length < rows.length) return;   // wait until every row makes sense
+  const s = priceSettings();
+  saveEnergySettings({ region: s.region, rate: s.rate, currency: s.currency, tou });
+}
+$('#setTou').addEventListener('change', saveTou);
+$('#setTou').addEventListener('click', e => { if (e.target.closest('[data-k=del]')) { e.target.closest('.set-price').remove(); saveTou(); } });
+$('#setTouAdd').addEventListener('click', () => {
+  const s = priceSettings();
+  renderTou([...(s.tou || []), { from: 16, to: 21, rate: s.rate }]);
+  saveTou();
+});
 async function saveEnergySettings(s) {
   try {
     const r = await fetch('/api/energy/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) });
     if (r.ok) energy.saved = await r.json();
   } catch {}
   renderPriceRow();
-  if (!$('#advView').hidden) renderAdv();
+  if (!$('#advView').hidden) loadAdv();   // costs are worked out by the hub
 }
 $('#setRegion').addEventListener('change', e => {
   const code = e.target.value, s = priceSettings();
-  if (code === 'custom') saveEnergySettings({ region: 'custom', rate: s.rate, currency: s.currency });
-  else saveEnergySettings({ region: code, currency: PRICE_REGIONS[code][1], rate: PRICE_REGIONS[code][2] });
+  if (code === 'custom') saveEnergySettings({ region: 'custom', rate: s.rate, currency: s.currency, tou: s.tou });
+  else saveEnergySettings({ region: code, currency: PRICE_REGIONS[code][1], rate: PRICE_REGIONS[code][2], tou: s.tou });
 });
 $('#setRate').addEventListener('change', e => {
   const v = parseFloat(e.target.value), s = priceSettings();
-  if (v > 0 && v <= 1000) saveEnergySettings({ region: s.region, rate: v, currency: s.currency }); else renderPriceRow();
+  if (v > 0 && v <= 1000) saveEnergySettings({ region: s.region, rate: v, currency: s.currency, tou: s.tou }); else renderPriceRow();
 });
 $('#setCurrency').addEventListener('change', e => {
   const s = priceSettings();
-  saveEnergySettings({ region: 'custom', rate: s.rate, currency: e.target.value });
+  saveEnergySettings({ region: 'custom', rate: s.rate, currency: e.target.value, tou: s.tou });
 });
 fetch('/api/energy/settings').then(r => r.json()).then(s => { energy.saved = s; renderPriceRow(); }).catch(() => renderPriceRow());
 
@@ -1546,6 +1576,9 @@ function renderAdv() {
   const end = Math.min(now, bounds[bounds.length - 1]);
   const nowW = rows.reduce((a, r) => a + (r.now?.watts || 0), 0);
   const kwh = rows.reduce((a, r) => a + (r.s?.wh || 0), 0) / 1000;
+  // The hub prices each minute at the rate in force then; without a saved price, use the guessed flat rate.
+  const devCost = s => s.cost ?? s.wh / 1000 * price.rate;
+  const cost = rows.reduce((a, r) => a + (r.s ? devCost(r.s) : 0), 0);
   const first = Math.min(...rows.map(r => r.s?.firstData ?? Infinity));
   const since = Math.max(bounds[0], first);
   const covered = Number.isFinite(first) ? end - since : 0;
@@ -1553,12 +1586,13 @@ function renderAdv() {
   const partial = Number.isFinite(first) && first > bounds[0] + (bounds[1] - bounds[0]);
   const sinceLabel = partial ? `since ${new Date(first).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : rangeLabel;
   const monthKwh = covered >= 3600e3 ? kwh / covered * 30.44 * 86400e3 : nowW * 24 * 30.44 / 1000;
+  const monthRate = covered >= 3600e3 && kwh > 0 ? cost / kwh : dayRate(price);   // what this usage pattern actually pays per kWh
   const tile = (k, v, s) => `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
   $('#advTiles').innerHTML = [
-    tile('Drawing now', fmtW(nowW), `${money(nowW / 1000 * 24 * price.rate)} a day at this rate`),
+    tile('Drawing now', fmtW(nowW), `${money(nowW / 1000 * 24 * dayRate(price))} a day at ${price.tou?.length ? 'your rates' : 'this rate'}`),
     tile('Energy used', data ? fmtKwh(kwh) : '…', sinceLabel),
-    tile('Cost', data ? money(kwh * price.rate) : '…', `at ${fmtPrice(price)}`),
-    tile('Per month', data ? money(monthKwh * price.rate) : '…', `≈ ${fmtKwh(monthKwh)} ${covered >= 3600e3 ? 'at the recent average' : 'at the current draw'}`),
+    tile('Cost', data ? money(cost) : '…', price.tou?.length ? (kwh > 0 ? `avg ${fmtKwhPrice(cost / kwh, price.currency)}/kWh with your time-of-use rates` : 'with your time-of-use rates') : `at ${fmtPrice(price)}`),
+    tile('Per month', data ? money(monthKwh * monthRate) : '…', `≈ ${fmtKwh(monthKwh)} ${covered >= 3600e3 ? 'at the recent average' : 'at the current draw'}`),
   ].join('');
   $('#advPrice').innerHTML = `<span>Electricity price <b>${esc(fmtPrice(price))}</b> · ${esc(priceSource(price))}</span><button class="btn" id="advPriceBtn">Change…</button>`;
 
@@ -1568,11 +1602,11 @@ function renderAdv() {
     <td style="--c:${cssColor(color)}"><i></i>${esc(d.name)}</td>
     <td${e ? ` title="${esc(powerBreakdown(e))}"` : ' class="muted"'}>${e ? fmtW(e.watts) : 'offline'}</td>
     <td>${fmtW(s?.stats.power?.avg)}</td><td>${fmtW(s?.stats.power?.peak)}</td>
-    <td>${s ? fmtKwh(s.wh / 1000) : '–'}</td><td>${s ? money(s.wh / 1000 * price.rate) : '–'}</td>
+    <td>${s ? fmtKwh(s.wh / 1000) : '–'}</td><td>${s ? money(devCost(s)) : '–'}</td>
     <td>${s ? Math.round(s.wh / total * 100) + '%' : ''}<span class="share" style="--c:${cssColor(color)}"><span style="width:${s ? Math.round(s.wh / total * 100) : 0}%"></span></span></td>
     <td class="src" title="${esc(powerBreakdown(e))}">${powerSource(e || d.latest?.powerEst)}</td></tr>`).join('');
   $('#advPower').innerHTML = pRows ? `<thead><tr><th>Device</th><th>Now</th><th>Average</th><th>Peak</th><th>Energy</th><th>Cost</th><th>Share</th><th style="text-align:left">Power reading</th></tr></thead>
-    <tbody>${pRows}</tbody><tfoot><tr><td>All devices</td><td>${fmtW(nowW)}</td><td></td><td></td><td>${data ? fmtKwh(kwh) : '…'}</td><td>${data ? money(kwh * price.rate) : '…'}</td><td></td><td></td></tr></tfoot>`
+    <tbody>${pRows}</tbody><tfoot><tr><td>All devices</td><td>${fmtW(nowW)}</td><td></td><td></td><td>${data ? fmtKwh(kwh) : '…'}</td><td>${data ? money(cost) : '…'}</td><td></td><td></td></tr></tfoot>`
     : `<tbody><tr><td class="muted" style="font-weight:400">No power data yet.</td></tr></tbody>`;
 
   // Usage table
@@ -1638,9 +1672,10 @@ function drawAdvChart() {
   }
   if (adv.hover != null && adv.hover < n) {
     const i = adv.hover, price = priceSettings(), soFar = data.bounds[i + 1] > Date.now() ? ' (so far)' : '';
+    const bucketCost = (s, i) => s.costBuckets?.[i] ?? s.buckets[i] / 1000 * price.rate;
     tip.innerHTML = `<div class="t">${esc(advBucketLabel(i, true))}${soFar}</div>` + rows.filter(r => r.s.buckets[i] > 0)
-      .map(r => `<div class="row" style="--c:${cssColor(r.color)}">${esc(r.d.name)} <b>${fmtKwh(r.s.buckets[i] / 1000)}</b> <span class="hint">${money(r.s.buckets[i] / 1000 * price.rate)}</span></div>`).join('')
-      + `<div class="row" style="--c:transparent">Total <b>${fmtKwh(totals[i])}</b> <span class="hint">${money(totals[i] * price.rate)}</span></div>`;
+      .map(r => `<div class="row" style="--c:${cssColor(r.color)}">${esc(r.d.name)} <b>${fmtKwh(r.s.buckets[i] / 1000)}</b> <span class="hint">${money(bucketCost(r.s, i))}</span></div>`).join('')
+      + `<div class="row" style="--c:transparent">Total <b>${fmtKwh(totals[i])}</b> <span class="hint">${money(rows.reduce((a, r) => a + bucketCost(r.s, i), 0))}</span></div>`;
     tip.style.display = 'block';
     const cx = L + slot * (i + 0.5), tw = tip.offsetWidth;
     tip.style.left = (cx + 14 + tw > W ? cx - tw - 14 : cx + 14) + 'px';

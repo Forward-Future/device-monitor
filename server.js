@@ -262,8 +262,8 @@ function costToday(id) {
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const bounds = [start.getTime(), Date.now() + 1];
   const ids = id === '*' ? Object.keys(registry) : registry[id] ? [id] : [];
-  const wh = ids.reduce((s, x) => s + usageSummary(x, bounds).wh, 0);
-  return { cost: wh / 1000 * config.energy.rate, currency: config.energy.currency };
+  const cost = ids.reduce((s, x) => s + usageSummary(x, bounds).cost, 0);
+  return { cost, currency: config.energy.currency };
 }
 const alerts = new Alerts({
   dataDir: DATA_DIR, broadcast, costToday, hubUrl: preferredHubUrl,
@@ -273,6 +273,13 @@ const alerts = new Alerts({
 // ---- Energy and usage totals (Advanced view) --------------------------------
 // `bounds` are bucket edges chosen by the dashboard (e.g. local midnights), so days follow the
 // viewer's time zone. Each 1-minute history point counts as one minute at its average power.
+// Cost uses the rate in force at each minute (time-of-use periods are in the hub's local time).
+function rateAt(t, e = config.energy) {
+  if (!e) return null;
+  if (!e.tou?.length) return e.rate;
+  const d = new Date(t), h = d.getHours() + d.getMinutes() / 60;
+  return e.tou.find(p => h >= p.from && h < p.to)?.rate ?? e.rate;
+}
 function usageSummary(id, bounds) {
   const reg = registry[id];
   const from = bounds[0], to = bounds[bounds.length - 1];
@@ -283,7 +290,8 @@ function usageSummary(id, bounds) {
     const a = acc[k] || (acc[k] = { sum: 0, n: 0, peak: -Infinity });
     a.sum += v; a.n++; if (max != null && max > a.peak) a.peak = max;
   };
-  let b = 0, wh = 0, minutes = 0, estimatedMinutes = 0, firstData = null;
+  const costBuckets = new Array(bounds.length - 1).fill(0);
+  let b = 0, wh = 0, cost = 0, minutes = 0, estimatedMinutes = 0, firstData = null;
   const bytes = { rx: 0, tx: 0, dr: 0, dw: 0 };
   for (const p of history.minutePoints(id, from, to)) {
     if (p.t < from || p.t >= to) continue;
@@ -291,7 +299,10 @@ function usageSummary(id, bounds) {
     minutes++; firstData ??= p.t;
     let w = p.power;
     if (w == null) { w = power.fromSample(p, reg.hw); if (w != null) estimatedMinutes++; }
-    if (w != null) { buckets[b] += w / 60; wh += w / 60; add('power', w, p.powerMax ?? w); }
+    if (w != null) {
+      buckets[b] += w / 60; wh += w / 60; add('power', w, p.powerMax ?? w);
+      const c = w / 60 / 1000 * (rateAt(p.t) || 0); costBuckets[b] += c; cost += c;
+    }
     add('cpu', p.cpu, p.cpuMax); add('gpu', p.gpu, p.gpuMax); add('mem', p.mem);
     add('cpuTemp', p.cpuTemp, p.cpuTempMax); add('gpuTemp', p.gpuTemp, p.gpuTempMax);
     for (const k of Object.keys(bytes)) bytes[k] += (p[k] || 0) * 60;
@@ -299,6 +310,7 @@ function usageSummary(id, bounds) {
   const stats = Object.fromEntries(Object.entries(acc).map(([k, a]) => [k, { avg: +(a.sum / a.n).toFixed(1), peak: a.peak === -Infinity ? null : +a.peak.toFixed(1) }]));
   return {
     id, wh: Math.round(wh), buckets: buckets.map(v => Math.round(v * 10) / 10),
+    cost: config.energy ? +cost.toFixed(4) : null, costBuckets: config.energy ? costBuckets.map(v => +v.toFixed(4)) : null,
     minutes, estimatedMinutes, stats, bytes: Object.fromEntries(Object.entries(bytes).map(([k, v]) => [k, Math.round(v)])),
     firstData,
   };
@@ -309,7 +321,19 @@ function validEnergySettings(b) {
   const region = typeof b.region === 'string' && /^([A-Z]{2}(-[A-Z]{2})?|custom)$/.test(b.region) ? b.region : null;
   const rate = typeof b.rate === 'number' && b.rate > 0 && b.rate <= 1000 ? Math.round(b.rate * 1e4) / 1e4 : null;
   const currency = typeof b.currency === 'string' && /^[A-Z]{3}$/.test(b.currency) ? b.currency : null;
-  return region && rate && currency ? { region, rate, currency } : null;
+  if (!(region && rate && currency)) return null;
+  // Optional time-of-use periods: [{ from, to, rate }] in local hours (0–24, from < to); `rate` covers every other hour.
+  if (b.tou == null || (Array.isArray(b.tou) && !b.tou.length)) return { region, rate, currency };
+  if (!Array.isArray(b.tou) || b.tou.length > 12) return null;
+  const hour = v => typeof v === 'number' && v >= 0 && v <= 24 ? Math.round(v * 4) / 4 : null;
+  const tou = [];
+  for (const p of b.tou) {
+    const from = hour(p?.from), to = hour(p?.to);
+    const r = typeof p?.rate === 'number' && p.rate > 0 && p.rate <= 1000 ? Math.round(p.rate * 1e4) / 1e4 : null;
+    if (from == null || to == null || from >= to || !r) return null;
+    tou.push({ from, to, rate: r });
+  }
+  return { region, rate, currency, tou: tou.sort((x, y) => x.from - y.from) };
 }
 
 // ---- Routes ---------------------------------------------------------------
