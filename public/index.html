@@ -224,13 +224,18 @@
   .share > span { display: block; height: 100%; background: var(--c); border-radius: 4px; }
   #advNote { margin-top: 14px; max-width: 900px; }
   .set-price { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
-  .set-price input { width: 84px; background: var(--surface-2); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font: inherit; text-align: right; }
+  .set-price input, .tou input { width: 84px; background: var(--surface-2); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font: inherit; text-align: right; }
   #setRegion { max-width: 220px; }
-  .tou { display: flex; flex-direction: column; gap: 6px; flex-basis: 100%; }
-  .tou .set-price { justify-content: flex-start; flex-wrap: nowrap; }
-  .tou select { min-width: 0; }
+  .price-ctl { display: flex; gap: 6px; align-items: center; }
+  .price-ctl .seg button { height: 32px; }
+  .set-row.wrap .price-body { flex-basis: 100%; }
+  .price-body[hidden] { display: none; }
+  .tou { display: grid; grid-template-columns: repeat(3, max-content) 84px repeat(2, max-content); gap: 6px; align-items: center; }
+  .tou-row { display: contents; }
+  .tou input { width: 100%; box-sizing: border-box; }
   .tou .bad select, .tou .bad input { border-color: var(--danger, #e5484d); }
-  .tou-add { align-self: flex-start; }
+  .tou-other { grid-column: span 3; color: var(--text-secondary); font-size: 13px; padding-left: 2px; }
+  .tou-add { margin-top: 8px; }
   .set-row.wrap { flex-wrap: wrap; row-gap: 8px; }
   .set-row.wrap .set-price { flex-basis: 100%; justify-content: flex-start; }
   @media (max-width: 520px) { #advView { padding: 12px; } }
@@ -363,9 +368,10 @@
   </div>
   <details class="set-adv" id="setAdv"><summary>Advanced settings</summary>
   <div class="set-section">
-    <div class="set-row wrap"><div class="set-text"><div class="set-k">Electricity price</div><div class="set-v hint" id="setPriceHint"></div></div><div class="set-price"><select id="setRegion" aria-label="Where you live"></select><input id="setRate" type="number" min="0" step="0.001" inputmode="decimal" aria-label="Price per kWh"><select id="setCurrency" aria-label="Currency"></select><span class="hint">per kWh</span></div></div>
-    <div class="set-row wrap"><div class="set-text"><div class="set-k">Time-of-use rates</div><div class="set-v hint">Different prices for certain hours, like peak and partial-peak. The rate above covers all other hours.</div></div>
-      <div class="tou"><div id="setTou" class="tou"></div><button class="btn tou-add" id="setTouAdd">+ Add time period</button></div></div>
+    <div class="set-row wrap"><div class="set-text"><div class="set-k">Electricity price</div><div class="set-v hint" id="setPriceHint"></div></div>
+      <div class="price-ctl"><div class="seg" id="setPriceMode"><button data-m="flat">One rate</button><button data-m="tou">Time of use</button></div><select id="setCurrency" aria-label="Currency"></select></div>
+      <div class="price-body set-price" id="setFlat"><select id="setRegion" aria-label="Where you live"></select><input id="setRate" type="number" min="0" step="0.001" inputmode="decimal" aria-label="Price per kWh"><span class="hint">per kWh</span></div>
+      <div class="price-body" id="setTouBox" hidden><div class="tou" id="setTou"></div><button class="btn tou-add" id="setTouAdd">+ Add time period</button></div></div>
   </div>
   </details>
   <div class="dlg-foot"><span class="hint app-only" id="setVersion"></span><span class="spacer"></span><button class="btn app-only" id="setQuit">Quit app</button><button class="btn primary" id="setDone" autofocus>Done</button></div>
@@ -1454,36 +1460,53 @@ function renderPriceRow() {
   }
   sel.value = s.region; cur.value = s.currency;
   if (document.activeElement !== $('#setRate')) $('#setRate').value = s.rate;
-  $('#setPriceHint').textContent = s.tou?.length ? 'The price for hours outside your time-of-use periods (off-peak).'
+  const tou = !!s.tou?.length;
+  for (const b of $('#setPriceMode').children) b.classList.toggle('on', (b.dataset.m === 'tou') === tou);
+  $('#setFlat').hidden = tou; $('#setTouBox').hidden = !tou;
+  $('#setPriceHint').textContent = tou ? 'Each hour is charged at the rate of its period.'
     : priceSource(s) + (s.guessed ? ' Pick your area, or enter the rate from your bill.' : ' Enter the rate from your bill for a better estimate.');
-  if (!$('#setTou').contains(document.activeElement)) renderTou(s.tou || []);
+  if (tou && !$('#setTou').contains(document.activeElement)) renderTou(s.tou, s.rate);
 }
-function renderTou(list) {
+function renderTou(list, base) {
   const opts = (v, from) => Array.from({ length: 24 }, (_, i) => i + (from ? 0 : 1))
     .map(h => `<option value="${h}"${h === v ? ' selected' : ''}>${fmtHour(h)}</option>`).join('');
-  $('#setTou').innerHTML = list.map(p => `<div class="set-price">
+  $('#setTou').innerHTML = list.map(p => `<div class="tou-row">
     <select data-k="from" aria-label="From">${opts(p.from, true)}</select><span class="hint">to</span>
     <select data-k="to" aria-label="To">${opts(p.to, false)}</select>
     <input data-k="rate" type="number" min="0" step="0.001" inputmode="decimal" value="${p.rate}" aria-label="Price per kWh"><span class="hint">per kWh</span>
-    <button class="icon-btn" data-k="del" title="Remove" aria-label="Remove"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`).join('');
+    <button class="icon-btn" data-k="del" title="Remove" aria-label="Remove"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>`).join('')
+    + `<div class="tou-row"><span class="tou-other">All other hours</span><input data-k="base" type="number" min="0" step="0.001" inputmode="decimal" value="${base}" aria-label="Price per kWh for all other hours"><span class="hint">per kWh</span><span></span></div>`;
 }
 function saveTou() {
-  const rows = [...$('#setTou').children], tou = [];
+  const rows = [...$('#setTou').children].filter(r => !$('[data-k=base]', r)), tou = [];
+  const base = parseFloat($('#setTou [data-k=base]').value), baseOk = base > 0 && base <= 1000;
+  $('#setTou [data-k=base]').parentElement.classList.toggle('bad', !baseOk);
   for (const r of rows) {
     const p = { from: +$('[data-k=from]', r).value, to: +$('[data-k=to]', r).value, rate: parseFloat($('[data-k=rate]', r).value) };
     const ok = p.from < p.to && p.rate > 0 && p.rate <= 1000;
     r.classList.toggle('bad', !ok);
     if (ok) tou.push(p);
   }
-  if (tou.length < rows.length) return;   // wait until every row makes sense
+  if (tou.length < rows.length || !baseOk) return;   // wait until every row makes sense
   const s = priceSettings();
-  saveEnergySettings({ region: s.region, rate: s.rate, currency: s.currency, tou });
+  if (!tou.length) return setPriceMode('flat');
+  saveEnergySettings({ region: s.region, rate: base, currency: s.currency, tou });
 }
-$('#setTou').addEventListener('change', saveTou);
-$('#setTou').addEventListener('click', e => { if (e.target.closest('[data-k=del]')) { e.target.closest('.set-price').remove(); saveTou(); } });
-$('#setTouAdd').addEventListener('click', () => {
+// Switching back and forth keeps the periods you had, for this session.
+let lastTou = null;
+function setPriceMode(m) {
   const s = priceSettings();
-  renderTou([...(s.tou || []), { from: 16, to: 21, rate: s.rate }]);
+  if ((m === 'tou') === !!s.tou?.length) return renderPriceRow();
+  if (m === 'flat') { lastTou = s.tou; saveEnergySettings({ region: s.region, rate: s.rate, currency: s.currency }); }
+  else saveEnergySettings({ region: s.region, rate: s.rate, currency: s.currency, tou: lastTou?.length ? lastTou : [{ from: 16, to: 21, rate: s.rate }] });
+}
+$('#setPriceMode').addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (b) setPriceMode(b.dataset.m); });
+$('#setTou').addEventListener('change', saveTou);
+$('#setTou').addEventListener('click', e => { if (e.target.closest('[data-k=del]')) { e.target.closest('.tou-row').remove(); saveTou(); } });
+$('#setTouAdd').addEventListener('click', () => {
+  const s = priceSettings(), last = s.tou?.[s.tou.length - 1];
+  const from = last && last.to < 24 ? last.to : 0;
+  renderTou([...(s.tou || []), { from, to: Math.min(24, from + 1), rate: s.rate }], s.rate);
   saveTou();
 });
 async function saveEnergySettings(s) {
@@ -1635,7 +1658,7 @@ function renderAdv() {
   $('#advLegend').innerHTML = rows.filter(r => r.s?.wh).map(r => `<span style="--c:${cssColor(r.color)}">${esc(r.d.name)}</span>`).join('');
   drawAdvChart();
 }
-$('#advPrice').addEventListener('click', e => { if (e.target.closest('#advPriceBtn')) openSettings().then(() => { $('#setAdv').open = true; $('#setRegion').focus(); }); });
+$('#advPrice').addEventListener('click', e => { if (e.target.closest('#advPriceBtn')) openSettings().then(() => { $('#setAdv').open = true; $('#setPriceMode .on')?.focus(); }); });
 
 function advBucketLabel(i, long) {
   const b = adv.data.bounds, d = new Date(b[i]);
