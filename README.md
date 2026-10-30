@@ -145,3 +145,7 @@ npm run hub        # headless hub only (e.g. on a home server), dashboard at :77
 | `build/make-icon.js` | Generates the app and tray icons |
 
 App data is stored in `%APPDATA%\Device Monitor`: `settings.json`, plus `hub\` with the device list and agent token. The installer isn't code-signed, so Windows SmartScreen may show "Windows protected your PC". Click **More info → Run anyway**.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
