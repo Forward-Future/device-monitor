@@ -2,7 +2,7 @@
 
 A desktop app (Windows and macOS) in the style of NZXT CAM that shows CPU, GPU, memory, temperatures, disks and network for all your machines in one window.
 
-![icon](build/icon.png)
+![Dashboard with four devices: a gaming PC, a DGX Spark, a MacBook Pro and a home server](docs/screenshots/dashboard.png)
 
 ## Install
 
@@ -27,6 +27,8 @@ The tray menu has the same options.
 
 ## Using the dashboard
 
+<img src="docs/screenshots/card-details.png" alt="A device card with Details open, showing the AI models loaded in ComfyUI and Ollama and GPU sensors" width="300" align="right">
+
 - **Reorder** cards by dragging the ⋮⋮ grip. The order is saved on the hub, so it's the same on every screen.
 - **Chart range**: 10 min / 60 min / 6 h in the header.
 - **History**: the History button, a card's ⋯ menu, or clicking a card's chart. Pick 1 h to 30 days, hover to inspect, drag across a chart to zoom, double-click to reset. History is stored on the hub (2-second samples for the last hour, 1-minute averages for 30 days).
@@ -38,6 +40,12 @@ Power is an estimate of what each device draws from the wall:
 - **Estimated:** an unmeasured CPU (from its load), plus the rest of the system and power-supply losses.
 
 Expect it to be within about 20% of a plug-in power meter.
+
+<br clear="right">
+
+| History | Advanced: electricity and usage |
+|---|---|
+| ![24 hours of utilization and temperature history for one device](docs/screenshots/history.png) | ![Electricity use and cost per device over 7 days](docs/screenshots/advanced.png) |
 
 ## Pushing updates to all your devices
 
@@ -131,6 +139,7 @@ npm run hub        # headless hub only (e.g. on a home server), dashboard at :77
 | `history.js` | Metric history (raw last hour + 1-minute averages for 30 days, on disk) |
 | `power.js` | Power estimates (watts at the wall) used for electricity use and cost |
 | `agent-runner.js`, `agent/` | Metric agents (Windows PowerShell, macOS and Linux bash) and their one-line installers |
+| `build/screenshots.js` | Regenerates the README screenshots in `docs/screenshots/` from a demo hub |
 | `build/test/` | Test fixtures: seeded test hub, macOS command mocks for the Mac agent |
 | `public/index.html` | Dashboard UI |
 | `build/make-icon.js` | Generates the app and tray icons |
