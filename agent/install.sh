@@ -1,7 +1,21 @@
 #!/usr/bin/env bash
-# Device Monitor installer (Linux and macOS). Run:  curl -fsSL "__HUB__/install.sh?token=__TOKEN__" | bash
+# Device Monitor installer (Linux and macOS).
+# Run:  curl -fsSL -H "Authorization: Bearer __TOKEN__" "__HUB__/install.sh" | bash
 set -e
 HUB='__HUB__'; TOKEN='__TOKEN__'
+SHA_AGENT='__SHA_AGENT__'; SHA_AGENT_MAC='__SHA_AGENT_MAC__'
+
+# Downloads a file and checks it against the SHA-256 the hub pinned when it issued this
+# installer — a tampered or spoofed agent script never runs.
+fetch_verified() {
+  local url="$1" out="$2" want="$3" got
+  curl -fsSL "$url" -o "$out"
+  if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum "$out" | cut -d' ' -f1)
+  elif command -v shasum >/dev/null 2>&1; then got=$(shasum -a 256 "$out" | cut -d' ' -f1)
+  elif command -v openssl >/dev/null 2>&1; then got=$(openssl dgst -sha256 "$out" | awk '{print $NF}')
+  else echo "Can't check the agent download (no sha256 tool found) — refusing to install." >&2; rm -f "$out"; exit 1; fi
+  if [ "$got" != "$want" ]; then echo "The agent download failed its integrity check — refusing to install." >&2; rm -f "$out"; exit 1; fi
+}
 
 if [ "$(uname -s)" = "Darwin" ]; then
   # macOS: background LaunchAgent for the current user (starts at login, restarts if it stops).
@@ -9,7 +23,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
   PLIST="$HOME/Library/LaunchAgents/com.devicemonitor.agent.plist"
   mkdir -p "$DIR" "$HOME/Library/LaunchAgents"
   launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
-  curl -fsSL "$HUB/agent-macos.sh" -o "$DIR/agent-macos.sh"; chmod +x "$DIR/agent-macos.sh"
+  fetch_verified "$HUB/agent-macos.sh" "$DIR/agent-macos.sh" "$SHA_AGENT_MAC"; chmod +x "$DIR/agent-macos.sh"
   printf "HUB='%s'\nTOKEN='%s'\n" "$HUB" "$TOKEN" > "$DIR/config"
   cat > "$PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -32,7 +46,7 @@ fi
 DIR="$HOME/.local/share/device-monitor"
 mkdir -p "$DIR"
 pkill -f "$DIR/agent.sh" 2>/dev/null || true
-curl -fsSL "$HUB/agent.sh" -o "$DIR/agent.sh"; chmod +x "$DIR/agent.sh"
+fetch_verified "$HUB/agent.sh" "$DIR/agent.sh" "$SHA_AGENT"; chmod +x "$DIR/agent.sh"
 printf "HUB='%s'\nTOKEN='%s'\n" "$HUB" "$TOKEN" > "$DIR/config"
 
 if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then

@@ -307,10 +307,12 @@ function loadMain() {
   if (!settings.mode) return win.loadFile(path.join(__dirname, 'app', 'setup.html'));
   const url = dashboardUrl();
   const go = () => { if (win && !win.isDestroyed()) win.loadURL(url); };
-  if (settings.mode !== 'client' || !settings.token) return go();   // the hub PC itself needs no key
-  // The hub only shows its dashboard with its key: hand it over as a cookie for that address.
+  // The hub only shows its dashboard with its key — even on the hub PC, so another local
+  // process can't take over the API through loopback. Hand it over as a cookie for that address.
+  const key = settings.mode === 'host' ? hub?.token : settings.token;
+  if (!key) return go();
   session.defaultSession.cookies.set({
-    url, name: 'dm_key', value: settings.token, httpOnly: true, sameSite: 'strict', secure: url.startsWith('https:'),
+    url, name: 'dm_key', value: key, httpOnly: true, sameSite: 'strict', secure: url.startsWith('https:'),
     expirationDate: Math.floor(Date.now() / 1000) + 400 * 86400,
   }).then(go, go);
 }
@@ -350,6 +352,7 @@ function buildTrayMenu() {
     items.push({ type: 'separator' });
   }
   if (updater?.status.state === 'ready') items.push({ label: `Restart to update to ${updater.status.version}`, click: () => updater.maybeInstall(true) }, { type: 'separator' });
+  else if (updater?.status.state === 'ready-download' && updater.readyFile) items.push({ label: `Open verified update ${updater.status.version}`, click: () => shell.openPath(updater.readyFile) }, { type: 'separator' });
   else if (updater?.status.state === 'available') items.push({ label: `Download update ${updater.status.version}…`, click: () => openExternalSafe(updater.status.downloadUrl) }, { type: 'separator' });
   items.push({ label: IS_MAC ? 'Open at login' : 'Start with Windows', type: 'checkbox', checked: startupEnabled(), enabled: app.isPackaged, click: m => setStartup(m.checked) });
   items.push({ label: 'Quit', click: () => { quitting = true; app.quit(); } });
@@ -406,14 +409,25 @@ handle('dm:setup', async (_e, { mode, hubUrl, code } = {}) => {
       if (!url) return { ok: false, error: 'Enter the hub address, e.g. 192.168.1.20' };
       let info, token = keyFromLink(hubUrl);
       try { info = await fetchInfo(url); } catch (e) { return { ok: false, error: `Couldn't reach a hub at ${url} (${e.message}). Check the address and that the hub PC is on.` }; }
-      if (info.token) token = info.token;   // hubs before 1.2.16 hand out their key
-      else {
-        const needCode = 'Enter the pairing code from the hub: on the hub PC, click + (Add device) → Desktop app.';
-        if (!token && !code) return { ok: false, needCode: true, error: needCode };
-        try { if (!token) token = await pairWithHub(url, String(code)); } catch (e) { return { ok: false, needCode: true, error: e.message }; }
-        try { info = await fetchInfo(url, token); } catch (e) { return { ok: false, error: `Couldn't reach a hub at ${url} (${e.message}).` }; }
-        if (info.token !== token) return { ok: false, needCode: true, error: 'That link is for a different hub. ' + needCode };
+      const needCode = 'Enter the pairing code from the hub: on the hub PC, click + (Add device) → Desktop app.';
+      // Never take a key the server volunteers: any box on the network can claim to be a hub.
+      // Only a key from a pasted dashboard link, or one earned with the hub's one-time pairing code, is trusted.
+      if (!token) {
+        if (!code) return { ok: false, needCode: true, error: needCode };
+        try { token = await pairWithHub(url, String(code)); } catch (e) { return { ok: false, needCode: true, error: e.message }; }
       }
+      // Prove the hub we paired with holds the same key: fresh nonce → HMAC, then a keyed info read.
+      try {
+        const nonce = crypto.randomBytes(16).toString('hex');
+        const probe = await fetchInfo(url, null, nonce);
+        if (probe.token) {   // hubs before 1.2.16 hand out their key openly
+          if (probe.token !== token) return { ok: false, needCode: true, error: 'That address answered with a different hub key. ' + needCode };
+        } else if (probe.proof !== hubProof(token, nonce)) {
+          return { ok: false, needCode: true, error: 'The server that answered is not the hub that issued the pairing code. ' + needCode };
+        }
+        info = await fetchInfo(url, token);
+      } catch (e) { return { ok: false, error: `Couldn't reach a hub at ${url} (${e.message}).` }; }
+      if (info.token !== token) return { ok: false, needCode: true, error: 'That link is for a different hub. ' + needCode };
       settings = { ...settings, mode: 'client', hubUrl: url, token, altHubUrls: [] }; activeHub = null;
       learnRemote(info);
       await startServices();
@@ -446,6 +460,7 @@ handle('dm:install-update', async () => {
   installRequested = true;
   const st = await updater.check();
   if (st.state === 'ready') updater.maybeInstall(true);
+  else if (st.state === 'ready-download' && updater.readyFile) shell.openPath(updater.readyFile);   // verified download (e.g. macOS .dmg)
   else if (st.state === 'available' && st.downloadUrl) openExternalSafe(st.downloadUrl);
   return updater.status;
 });
@@ -486,6 +501,8 @@ if (!app.requestSingleInstanceLock()) {
       app, publicKeyPem: UPDATE_KEY, dir: path.join(app.getPath('userData'), 'updates'),
       hubUrl: () => (settings.mode === 'host' ? `http://127.0.0.1:${PORT}` : settings.mode === 'client' ? activeHub || settings.hubUrl : null),
       canInstall: () => app.isPackaged && IS_WIN && (settings.autoUpdate !== false || installRequested),
+      // Platforms without silent install (macOS) still get the verified download, not a browser link.
+      manualDownload: () => app.isPackaged && IS_MAC && !!UPDATE_KEY,
       // While the window is on screen the dashboard shows an Update button instead of restarting
       // under the user (the updater still installs on its own after an hour).
       isBusy: () => !!win && win.isVisible() && !win.isMinimized(),
@@ -493,10 +510,11 @@ if (!app.requestSingleInstanceLock()) {
       onStatus: st => {
         buildTrayMenu();
         sendToPage('dm:update-status', st);
-        if (st.state === 'available' && st.version !== notifiedVersion && Notification.isSupported()) {
+        const showable = st.state === 'available' || st.state === 'ready-download';
+        if (showable && st.version !== notifiedVersion && Notification.isSupported()) {
           notifiedVersion = st.version;
-          const n = new Notification({ title: `Device Monitor ${st.version} is available`, body: 'Click to download it from your hub.', icon: ICON });
-          n.on('click', () => openExternalSafe(st.downloadUrl)); n.show();
+          const n = new Notification({ title: `Device Monitor ${st.version} is available`, body: 'Click to install it.', icon: ICON });
+          n.on('click', () => st.state === 'ready-download' && updater.readyFile ? shell.openPath(updater.readyFile) : openExternalSafe(st.downloadUrl)); n.show();
         }
       },
     });

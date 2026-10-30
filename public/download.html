@@ -52,11 +52,11 @@ const steps = {
 };
 (async () => {
   const [files, info] = await Promise.all([fetch('/api/downloads').then(r => r.json()), fetch('/api/info').then(r => r.json())]);
-  const card = (f, primary) => `<div class="card ${primary ? 'primary' : ''}"><div class="row"><div class="info"><div class="name">${f.platform === 'windows' ? 'Windows' : 'macOS'} app</div><div class="meta">${esc(f.name)} · ${fmtSize(f.size)}</div></div><a class="btn ${primary ? 'primary' : ''}" href="/download/${encodeURIComponent(f.name)}" download>Download</a></div>${primary ? steps[f.platform] : ''}</div>`;
+  const card = (f, primary) => `<div class="card ${primary ? 'primary' : ''}"><div class="row"><div class="info"><div class="name">${f.platform === 'windows' ? 'Windows' : 'macOS'} app</div><div class="meta">${esc(f.name)} · ${fmtSize(f.size)}</div></div><a class="btn ${primary ? 'primary' : ''}" href="/download/${encodeURIComponent(f.name)}" download>Download</a></div>${f.sha256 ? `<div class="meta" style="word-break:break-all;margin-top:8px">SHA-256: ${esc(f.sha256)}</div>` : ''}${primary ? steps[f.platform] : ''}</div>`;
   const forOs = files.filter(f => f.platform === os), others = files.filter(f => f.platform !== os);
   let html = forOs.map((f, i) => card(f, i === 0)).join('');
   if (os === 'mac' && !forOs.length && info.token) {   // only shown to a browser that has the dashboard key
-    const cmd = `curl -fsSL "${location.origin}/install.sh?token=${info.token}" | bash`;
+    const cmd = `curl -fsSL -H "Authorization: Bearer ${info.token}" "${location.origin}/install.sh" | bash`;
     html += `<div class="card primary"><div class="name">macOS</div><p class="muted" style="margin:6px 0 0">The Mac app hasn't been built yet. In the meantime, add this Mac to the dashboard by pasting this into <b>Terminal</b>. It runs a small background agent (no sudo):</p><code class="cmd">${esc(cmd)}</code><p class="muted">Then view the dashboard in your browser at the address below.</p></div>`;
   }
   html += others.map(f => card(f, false)).join('');

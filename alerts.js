@@ -5,6 +5,8 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const dns = require('dns');
+const net = require('net');
 const { readJson, writeJson } = require('./safe-json');
 
 // threshold: [min, max]; hyst: how far a value must fall back below the threshold to count as resolved.
@@ -30,7 +32,35 @@ const MAX_LOG = 300;
 
 const newId = () => crypto.randomBytes(6).toString('hex');
 const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
-const httpUrl = s => { try { const u = new URL(String(s)); return /^https?:$/.test(u.protocol) ? u.href.replace(/\/$/, '') : null; } catch { return null; } };
+// Alert webhooks/ntfy may point anywhere on the internet — but never at loopback, link-local or
+// cloud-metadata addresses, so a key-holder can't turn the hub into an SSRF bounce point.
+// LAN/private addresses stay allowed: self-hosted ntfy or a chat bridge on the network is a
+// legitimate setup.
+function isBlockedAddress(ip) {
+  let a = String(ip).toLowerCase().replace(/^\[|\]$/g, '');
+  if (a.startsWith('::ffff:')) {
+    a = a.slice(7);          // IPv4-mapped IPv6, dotted (127.0.0.1) or hex groups (7f00:1)
+    if (!net.isIPv4(a) && a.includes(':')) {
+      const g = a.split(':').map(h => parseInt(h, 16));
+      if (g.length === 2 && g.every(Number.isFinite)) a = [g[0] >> 8, g[0] & 255, g[1] >> 8, g[1] & 255].join('.');
+    }
+  }
+  if (net.isIPv4(a)) {
+    const [x, y] = a.split('.').map(Number);
+    return x === 0 || x === 127 || (x === 169 && y === 254);
+  }
+  return a === '::1' || a === '::' || /^fe[89ab]/.test(a);   // loopback, unspecified, link-local
+}
+const BLOCKED_HOST = h => isBlockedAddress(h);
+const httpUrl = s => {
+  try {
+    const u = new URL(String(s));
+    if (!/^https?:$/.test(u.protocol)) return null;
+    const h = u.hostname.toLowerCase();
+    if (BLOCKED_HOST(h) || h === 'localhost' || h.endsWith('.localhost')) return null;
+    return u.href.replace(/\/$/, '');
+  } catch { return null; }
+};
 const clean = (s, max) => (typeof s === 'string' ? s.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, max) : '');
 
 function validRule(r) {
@@ -280,7 +310,15 @@ class Alerts {
 
 async function post(url, body) {
   try {
-    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(10e3) });
+    // Check where the name actually resolves — a DNS name pointing at loopback/metadata is just
+    // as much an SSRF as a literal address. Redirects are refused rather than followed, for the
+    // same reason.
+    const { hostname } = new URL(url);
+    if (!net.isIP(hostname.replace(/^\[|\]$/g, ''))) {
+      const addrs = await dns.promises.lookup(hostname, { all: true }).catch(() => []);
+      if (addrs.length && addrs.every(a => isBlockedAddress(a.address))) return { ok: false, error: 'blocked: resolves to a local address' };
+    } else if (isBlockedAddress(hostname)) return { ok: false, error: 'blocked: local address' };
+    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(10e3), redirect: 'manual' });
     return res.ok ? { ok: true } : { ok: false, error: `HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 200)}`.trim() };
   } catch (e) { return { ok: false, error: e.cause?.code || e.message }; }
 }
