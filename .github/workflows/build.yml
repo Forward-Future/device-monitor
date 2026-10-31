@@ -7,6 +7,10 @@ on:
   push:
     tags: ['v*']
 
+# Build and upload artifacts only: no write access to the repository.
+permissions:
+  contents: read
+
 jobs:
   build:
     strategy:

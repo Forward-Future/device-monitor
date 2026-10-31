@@ -66,7 +66,7 @@ Progress for each device is in **Settings → Updates**, and each card shows its
 
 - **The release key.** The first `npm run release` creates a signing key at `~/.device-monitor/release-key.pem`. It is not in the repo. **Back it up.** Apps only accept updates signed with it. The public half is `build/update-key.pub.pem` and is built into the app.
 - **Apps older than 1.2.0** have no updater. Their dashboard shows a notice with a download button, so they need one manual install.
-- **Macs** can't install updates themselves without an Apple Developer ID, so they show an "update available" notification that opens the download page.
+- **Macs** can't install updates silently without an Apple Developer ID. The app downloads the new `.dmg` from the hub, checks its signature and SHA-256, and then offers to open it (notification, tray menu and Settings → Updates).
 - **Agents installed with the one-line command** (e.g. on Linux servers) aren't the app, so they don't update this way. Re-run the one-liner to refresh them.
 
 ## Mac
@@ -108,14 +108,16 @@ Windows doesn't expose CPU temperature to normal apps, which is why LibreHardwar
 
 Device Monitor is designed for a home network, with remote access over Tailscale.
 
-- **Access key.** The dashboard and its API need the hub's key, except on the hub PC itself. Browsers get it once from the dashboard link (Settings → Dashboard link → Copy, or the Add device dialog) and keep it in an HttpOnly, SameSite=Strict cookie. Desktop apps join with a one-time 6-digit pairing code (valid 10 minutes, 5 tries) or the dashboard link. Agents use the same key to report.
+- **Access key.** The dashboard and its API need the hub's key everywhere, including on the hub PC itself (the app signs itself in with a cookie), so another local process can't drive the hub through loopback. Browsers get it once from the dashboard link (Settings → Dashboard link → Copy, or the Add device dialog) and keep it in an HttpOnly, SameSite=Strict cookie. Desktop apps join with a one-time 6-digit pairing code (valid 10 minutes, 5 tries) or the dashboard link. Agents use the same key to report.
 - **Apps check the hub first.** Before sending its key, an app makes the hub prove it knows it (an HMAC of a random challenge), so searching Tailscale peers or an old address can't leak the key.
 - **Local addresses only.** The hub refuses connections from outside the local network and Tailscale (public IPv4/IPv6), even if a port is forwarded to it.
 - **No cross-site requests.** Changes (POST/PUT/PATCH/DELETE) with another site's Origin are refused, including requests to `127.0.0.1` from web pages.
 - **Websites can't reach it.** The hub only answers requests addressed to it by IP address, localhost or this computer's own name. That blocks DNS-rebinding attacks from websites you visit. To use a custom DNS name, add it to `"allowedHosts"` in the hub's `config.json`.
 - **Strict pages.** Pages are served with a strict Content-Security-Policy, and every metric an agent reports is validated and re-typed by the hub.
 - **App updates** are signed (see above), so tampering on the network can't push code to your devices.
-- **One-line installs and downloads use plain HTTP.** Only use them on a network you trust.
+- **One-line installs** send the key as an `Authorization` header rather than in the URL, and check the SHA-256 of the agent script they download against the value the hub pinned when it issued the command. The hub's open endpoints (install commands, downloads, pairing, hub info) are rate-limited per address.
+- **Keys on disk** are stored in files only your user account can read (`chmod 600` on macOS and Linux; per-user folders on Windows).
+- **Plain HTTP on the LAN.** Installs and downloads travel unencrypted unless you use the hub's Tailscale HTTPS address, so only run them on a network you trust.
 - **Firewall.** "Network access" in Settings opens TCP 7777 (dashboard/API) and UDP 7778 (discovery) to the local subnet only, on any network profile (many home networks are marked Public). It also removes the broad any-port rules Windows creates from its own "allow this app" prompt. Tailscale doesn't need any firewall rule.
 
 ## Development

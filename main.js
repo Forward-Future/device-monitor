@@ -41,8 +41,9 @@ function saveSettings() {
   clearTimeout(saveSettingsTimer);
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
   // Write a temporary file and swap it in, so a crash or power cut can't leave a half-written file.
+  // Readable by this user only: in Connect mode the file holds the hub's key.
   const tmp = settingsFile + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), { mode: 0o600 });
   fs.renameSync(tmp, settingsFile);
 }
 let saveSettingsTimer = null;
@@ -106,6 +107,9 @@ async function pairWithHub(hubUrl, code) {
   return body.token;
 }
 
+// What a hub key looks like (hex from the hub; anything else a hub or link hands over is refused,
+// so it can never carry header- or cookie-breaking characters into requests).
+const TOKEN_RE = /^[A-Za-z0-9_-]{8,128}$/;
 // A dashboard link (http://hub:7777/?key=…) carries the hub's key.
 function keyFromLink(input) {
   try { return new URL(/^https?:\/\//i.test(input) ? input : 'http://' + input).searchParams.get('key') || null; } catch { return null; }
@@ -416,6 +420,7 @@ handle('dm:setup', async (_e, { mode, hubUrl, code } = {}) => {
         if (!code) return { ok: false, needCode: true, error: needCode };
         try { token = await pairWithHub(url, String(code)); } catch (e) { return { ok: false, needCode: true, error: e.message }; }
       }
+      if (!TOKEN_RE.test(String(token))) return { ok: false, needCode: true, error: 'That link or hub handed over an unusable key. ' + needCode };
       // Prove the hub we paired with holds the same key: fresh nonce → HMAC, then a keyed info read.
       try {
         const nonce = crypto.randomBytes(16).toString('hex');

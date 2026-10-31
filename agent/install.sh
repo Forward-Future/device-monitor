@@ -24,7 +24,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
   mkdir -p "$DIR" "$HOME/Library/LaunchAgents"
   launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
   fetch_verified "$HUB/agent-macos.sh" "$DIR/agent-macos.sh" "$SHA_AGENT_MAC"; chmod +x "$DIR/agent-macos.sh"
-  printf "HUB='%s'\nTOKEN='%s'\n" "$HUB" "$TOKEN" > "$DIR/config"
+  (umask 077; printf "HUB='%s'\nTOKEN='%s'\n" "$HUB" "$TOKEN" > "$DIR/config"); chmod 600 "$DIR/config"   # holds the hub's key: readable by this user only
   cat > "$PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -47,7 +47,7 @@ DIR="$HOME/.local/share/device-monitor"
 mkdir -p "$DIR"
 pkill -f "$DIR/agent.sh" 2>/dev/null || true
 fetch_verified "$HUB/agent.sh" "$DIR/agent.sh" "$SHA_AGENT"; chmod +x "$DIR/agent.sh"
-printf "HUB='%s'\nTOKEN='%s'\n" "$HUB" "$TOKEN" > "$DIR/config"
+(umask 077; printf "HUB='%s'\nTOKEN='%s'\n" "$HUB" "$TOKEN" > "$DIR/config"); chmod 600 "$DIR/config"   # holds the hub's key: readable by this user only
 
 if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
   mkdir -p "$HOME/.config/systemd/user"

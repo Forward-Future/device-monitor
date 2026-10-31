@@ -59,6 +59,7 @@ cpu_power() {
 PREV_RAPL="$(read_rapl)"
 
 # AI models loaded (Ollama, LM Studio, ComfyUI, vLLM, llama.cpp...), checked every 5th report.
+# Python runs isolated (-I): nothing is imported from the working directory or PYTHON* variables.
 PY3="$(command -v python3)"
 read -r -d '' AI_PY <<'PY'
 import json, os, re, subprocess, urllib.request
@@ -136,7 +137,7 @@ while true; do
   # Exit with the desktop app that started us (if any).
   if [ -n "$PARENT_PID" ] && ! kill -0 "$PARENT_PID" 2>/dev/null; then exit 0; fi
   T=$(date +%s.%N); CUR_CPU="$(read_cpu)"; CUR_NET="$(read_net)"; CUR_DISK="$(read_disk)"
-  if [ -n "$PY3" ] && [ $((AI_N++ % 5)) -eq 0 ]; then AI="$("$PY3" -c "$AI_PY" 2>/dev/null)"; fi
+  if [ -n "$PY3" ] && [ $((AI_N++ % 5)) -eq 0 ]; then AI="$("$PY3" -I -c "$AI_PY" 2>/dev/null)"; fi
   CPU_JSON="$(paste -d' ' <(echo "$PREV_CPU") <(echo "$CUR_CPU") | awk '
     { d=$6-$3; u=(d>0)?100*(1-($5-$2)/d):0; if(u<0)u=0; v=sprintf("%.1f",u)
       if($1=="cpu") total=v; else cores=cores (cores==""?"":",") v }
@@ -169,7 +170,7 @@ while true; do
     GPUS="$GPUS${GPUS:+,}{\"name\":\"AMD GPU\",\"vendor\":\"amd\",\"usage\":$U,\"temp\":$GT,\"memUsed\":$MU,\"memTotal\":$MT,\"power\":$GP}"
   done
 
-  BODY="{\"id\":\"$ID\",\"token\":\"$TOKEN\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"linux\",\"appVersion\":\"$(esc "${DM_APP_VERSION:-}")\",\"os\":\"$(esc "$OS")\",\"formFactor\":\"$FORM\",\"power\":{\"cpu\":$(num "$CPU_W")},\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$THREADS,\"clockMHz\":$MHZ,\"temp\":$(cpu_temp),$CPU_JSON},\"memory\":{$MEM},\"gpus\":[$GPUS],\"disks\":[$DISKS],$RATES,\"ai\":${AI:-null}}"
+  BODY="{\"id\":\"$(esc "$ID")\",\"token\":\"$TOKEN\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"linux\",\"appVersion\":\"$(esc "${DM_APP_VERSION:-}")\",\"os\":\"$(esc "$OS")\",\"formFactor\":\"$FORM\",\"power\":{\"cpu\":$(num "$CPU_W")},\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$THREADS,\"clockMHz\":$MHZ,\"temp\":$(cpu_temp),$CPU_JSON},\"memory\":{$MEM},\"gpus\":[$GPUS],\"disks\":[$DISKS],$RATES,\"ai\":${AI:-null}}"
   curl -fsS -m 5 -X POST -H 'Content-Type: application/json' --data-binary "$BODY" "$HUB/api/report" >/dev/null 2>&1
   sleep "$INTERVAL"
 done

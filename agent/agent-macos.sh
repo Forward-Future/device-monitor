@@ -78,6 +78,7 @@ disks_json() {   # APFS: report the container (total - available), like Finder d
 }
 
 # AI models loaded (Ollama, LM Studio, ComfyUI, vLLM, llama.cpp...), checked every 5th report.
+# Python runs isolated (-I): nothing is imported from the working directory or PYTHON* variables.
 # /usr/bin/python3 is only a stub that offers to install developer tools until they are installed.
 PY3="$(command -v python3)"; [ "$PY3" = /usr/bin/python3 ] && ! xcode-select -p >/dev/null 2>&1 && PY3=""
 read -r -d '' AI_PY <<'PY'
@@ -152,7 +153,7 @@ PY
 AI_N=0
 PREV_NET="$(read_net)"; PREV_DISK="$(read_disk)"; PREV_T="$(now)"
 while true; do
-  if [ -n "$PY3" ] && [ $((AI_N++ % 5)) -eq 0 ]; then AI="$("$PY3" -c "$AI_PY" 2>/dev/null)"; fi
+  if [ -n "$PY3" ] && [ $((AI_N++ % 5)) -eq 0 ]; then AI="$("$PY3" -I -c "$AI_PY" 2>/dev/null)"; fi
   # Exit with the desktop app that started us (if any).
   if [ -n "$PARENT_PID" ] && ! kill -0 "$PARENT_PID" 2>/dev/null; then exit 0; fi
   CPU="$(cpu_usage)"   # takes ~1s

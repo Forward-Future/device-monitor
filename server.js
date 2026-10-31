@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const net = require('net');
 const { startAgent } = require('./agent-runner');
 const discovery = require('./discovery');
 const { HistoryStore } = require('./history');
@@ -179,17 +180,23 @@ function isLoopback(req) {
 // cheap per-IP allowance, so a noisy LAN peer can't make the hub stream installers nonstop.
 const RATE_WINDOW_MS = 60e3, RATE_MAX = 120;
 const rates = new Map();
+const RATE_MAX_KEYS = 5000;   // distinct addresses tracked at once
+const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 function rateOk(req) {
-  // Tailscale serve forwards every tailnet client as 127.0.0.1 — key on X-Forwarded-For so one
-  // busy peer can't exhaust the shared allowance.
-  const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  const ip = fwd || req.socket.remoteAddress || '';
+  // Tailscale serve hands every tailnet client over from 127.0.0.1 with X-Forwarded-For, so on a
+  // loopback connection the forwarded address is the real client. From anywhere else the header is
+  // whatever the peer typed: honouring it would let a LAN client dodge the limit (and grow this
+  // table without bound) just by rotating it, so those are keyed on the socket address.
+  const addr = req.socket.remoteAddress || '';
+  const fwd = LOOPBACK.has(addr) ? String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() : '';
+  let ip = net.isIP(fwd) ? fwd : addr;
   const now = Date.now();
   let r = rates.get(ip);
+  if (!r && rates.size >= RATE_MAX_KEYS) { ip = addr; r = rates.get(ip); }   // table full: share the socket's allowance
   if (!r || now - r.at > RATE_WINDOW_MS) { r = { at: now, n: 0 }; rates.set(ip, r); }
   return ++r.n <= RATE_MAX;
 }
-setInterval(() => { const cut = Date.now() - RATE_WINDOW_MS; for (const [ip, r] of rates) if (r.at < cut) rates.delete(ip); }, RATE_WINDOW_MS).unref();
+const rateTimer = setInterval(() => { const cut = Date.now() - RATE_WINDOW_MS; for (const [ip, r] of rates) if (r.at < cut) rates.delete(ip); }, RATE_WINDOW_MS).unref();
 const MAX_DL_STREAMS = 8;
 let dlStreams = 0;
 
@@ -218,9 +225,12 @@ function hubUrlFor(req) {   // Host was validated by hostAllowed()
   return `${proto}://${req.headers.host}`;
 }
 
+// Fills __NAME__ placeholders in an install script. Values land inside single-quoted strings
+// (PowerShell or bash), so a quote in a value can never end the string early.
 function template(file, vars) {
   let text = fs.readFileSync(path.join(ROOT, 'agent', file), 'utf8');
-  for (const [k, v] of Object.entries(vars)) text = text.split(`__${k}__`).join(v);
+  const quote = v => (file.endsWith('.ps1') ? String(v).replace(/'/g, "''") : String(v).replace(/'/g, "'\\''"));
+  for (const [k, v] of Object.entries(vars)) text = text.split(`__${k}__`).join(quote(v));
   return text;
 }
 
@@ -533,10 +543,13 @@ const server = http.createServer(async (req, res) => {
     const hm = p.match(/^\/api\/history\/([^/]+)$/);
     const hid = hm && deviceFromPath(hm[1]);
     if (req.method === 'GET' && hid) {
-      const to = Number(url.searchParams.get('to')) || Date.now();
+      // Only finite numbers: "Infinity" or "1e999" would otherwise turn into NaN bucket times.
+      const qnum = k => { const v = url.searchParams.get(k); const n = v ? Number(v) : NaN; return Number.isFinite(n) ? n : null; };
+      const to = qnum('to') ?? Date.now();
       const range = url.searchParams.get('range');
-      const from = Number(url.searchParams.get('from')) || to - (Object.hasOwn(RANGES, range) ? RANGES[range] : RANGES['1h']);
-      const points = Math.max(10, Math.min(3000, Number(url.searchParams.get('points')) || 1200));
+      const from = qnum('from') ?? to - (Object.hasOwn(RANGES, range) ? RANGES[range] : RANGES['1h']);
+      const points = Math.max(10, Math.min(3000, qnum('points') || 1200));
+      if (from >= to) return send(res, 400, { error: 'bad range' });
       return send(res, 200, history.query(hid, from, to, points));
     }
     const pm = p.match(/^\/api\/devices\/([^/]+)\/(processes|action)$/);
@@ -567,7 +580,8 @@ const server = http.createServer(async (req, res) => {
     if (id) {
       if (req.method === 'PATCH') {
         const body = await readBody(req);
-        if (typeof body.name === 'string' && body.name.trim()) { registry[id].name = body.name.trim().slice(0, 60); registry[id].renamed = true; }
+        const name = typeof body.name === 'string' ? sec.cleanText(body.name, 60) : null;   // no control characters
+        if (name) { registry[id].name = name; registry[id].renamed = true; }
         saveRegistry();
         broadcast({ type: 'device', device: deviceView(id) });
         return send(res, 200, deviceView(id));
@@ -592,7 +606,7 @@ return new Promise((resolve, reject) => {
     const responder = discovery.respond({ port: PORT });
     resolve({
       port: PORT, token: config.token, addresses: lanAddresses(),
-      close: () => { if (saveTimer) { clearTimeout(saveTimer); writeJson(DEVICES_FILE, registry); } alerts.close(); clearInterval(remoteTimer); downloadsWatch?.close(); clearTimeout(watchTimer); history.close(); responder.close(); clearInterval(statusTimer); for (const c of clients) c.destroy(); server.close(); },
+      close: () => { if (saveTimer) { clearTimeout(saveTimer); writeJson(DEVICES_FILE, registry); } alerts.close(); clearInterval(remoteTimer); clearInterval(rateTimer); downloadsWatch?.close(); clearTimeout(watchTimer); history.close(); responder.close(); clearInterval(statusTimer); for (const c of clients) c.destroy(); server.close(); },
     });
   });
 });

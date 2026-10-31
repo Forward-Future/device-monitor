@@ -86,12 +86,16 @@ function normalizeProcesses(v) {
 // A web page on some other site can't read the hub's API cross-origin, but with DNS rebinding
 // it can make its own hostname resolve to the hub. Only answer requests addressed to this
 // machine by IP, localhost, or this machine's own name.
+// Names must also look like DNS names: the Host value is written into the install scripts the
+// hub serves (inside quoted strings), so no quotes or shell characters may get through.
+const HOSTNAME_RE = /^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)*$/;
 function hostAllowed(hostHeader, extra = []) {
   if (!hostHeader) return false;
   let host = String(hostHeader).trim().toLowerCase();
   if (host.startsWith('[')) host = host.slice(1, host.indexOf(']'));   // [IPv6]:port
   else host = host.replace(/:\d+$/, '');
   if (net.isIP(host)) return true;
+  if (host.length > 253 || !HOSTNAME_RE.test(host)) return false;
   const me = os.hostname().toLowerCase();
   const allowed = new Set(['localhost', me, `${me}.local`, `${me}.lan`, `${me}.home`, `${me}.home.arpa`, ...extra.map(h => String(h).toLowerCase())]);
   if (allowed.has(host)) return true;
@@ -166,4 +170,4 @@ function htmlWithNonce(html) {
   return { body, headers: { 'Content-Security-Policy': csp, 'X-Frame-Options': 'DENY' } };
 }
 
-module.exports = { isValidId, normalizeReport, normalizeProcesses, ACTIONS, hostAllowed, isPrivateAddress, isLocalAddress, safeEqual, cookie, sameOrigin, htmlWithNonce, BASE_HEADERS };
+module.exports = { isValidId, normalizeReport, normalizeProcesses, cleanText: str, ACTIONS, hostAllowed, isPrivateAddress, isLocalAddress, safeEqual, cookie, sameOrigin, htmlWithNonce, BASE_HEADERS };
