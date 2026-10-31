@@ -877,16 +877,19 @@ document.addEventListener('click', () => document.querySelector('.menu')?.remove
 let osTab = 'win';
 function hubOrigins() {
   const local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(location.hostname);
+  // Tailscale HTTPS first: installs and links over it can't be tampered with on the LAN.
+  const ts = (info?.remote?.urls || []).filter(u => u.startsWith('https:')).map(u => ({ url: u, label: u.replace(/^https:\/\//, '') + ' (Tailscale, encrypted)' }));
   const lan = (info?.addresses || []).map(a => ({ url: `http://${a.address}:${info.port}`, label: `${a.address} (${a.name})` }));
   const here = { url: location.origin, label: location.host + ' (this address)' };
-  return local ? lan.concat(lan.length ? [] : [here]) : [here, ...lan.filter(l => l.url !== here.url)];
+  const all = local ? lan.concat(lan.length ? [] : [here]) : [here, ...lan.filter(l => l.url !== here.url)];
+  return ts.concat(all.filter(o => !ts.some(t => t.url === o.url)));
 }
 function updateCmd() {
   const hub = $('#hubSel').value;
   const t = info.token;
   $('#cmd').textContent = osTab === 'win'
-    ? `irm "${hub}/install.ps1?token=${t}" | iex`
-    : `curl -fsSL "${hub}/install.sh?token=${t}" | bash`;
+    ? `irm -Headers @{Authorization='Bearer ${t}'} "${hub}/install.ps1" | iex`
+    : `curl -fsSL -H "Authorization: Bearer ${t}" "${hub}/install.sh" | bash`;
   $('#cmdRow').style.display = osTab === 'app' ? 'none' : '';
   $('#pairRow').hidden = osTab !== 'app';
   $('#viewUrl').textContent = `${hub}/?key=${t}`;
@@ -1328,6 +1331,7 @@ function describeUpdate(u, s) {
     case 'checking': return ['Checking for updates…', null];
     case 'downloading': return [`Downloading version ${u.version}…`, null];
     case 'ready': return [`Version ${u.version} is ready.`, 'Restart to update'];
+    case 'ready-download': return [`Version ${u.version} downloaded and verified.`, 'Open installer'];
     case 'installing': return [`Installing version ${u.version}…`, null];
     case 'available': return [`Version ${u.version} is available.`, s.canAutoUpdate ? 'Install now' : 'Download…'];
     case 'error': return [`Couldn't update: ${u.message}`, 'Try again'];
@@ -1340,7 +1344,7 @@ function renderUpdateRow(s) {
   $('#setUpdateText').textContent = text;
   const b = $('#setUpdateBtn');
   b.hidden = !action; b.textContent = action || ''; b.disabled = false;
-  b.dataset.action = s.update?.state === 'ready' || s.update?.state === 'available' ? 'install' : 'check';
+  b.dataset.action = ['ready', 'ready-download', 'available'].includes(s.update?.state) ? 'install' : 'check';
   $('#setAutoUpdateRow').hidden = !s.canAutoUpdate;
   $('#setAutoUpdate').checked = !!s.autoUpdate;
 }
@@ -1359,12 +1363,13 @@ function renderUpdateButton(u) {
   const b = $('#updateBtn'), st = u.state;
   if (st === 'checking' && !b.hidden) return;   // periodic re-checks shouldn't make it flicker
   updateStatus = u;
-  b.hidden = !['downloading', 'ready', 'available', 'installing'].includes(st);
+  b.hidden = !['downloading', 'ready', 'ready-download', 'available', 'installing'].includes(st);
   if (b.hidden) return;
   const [full, short, title] =
       st === 'downloading' ? [`Downloading ${u.version}…`, 'Update…', `Downloading version ${u.version}`]
     : st === 'installing' ? ['Restarting…', 'Restarting…', `Installing version ${u.version}`]
     : st === 'ready' ? [`Update to ${u.version}`, 'Update', `Restart Device Monitor to install version ${u.version}`]
+    : st === 'ready-download' ? [`Update to ${u.version}`, 'Update', `Version ${u.version} downloaded and verified — click to open the installer`]
     : [`Update to ${u.version}`, 'Update', `Version ${u.version} is available`];
   $('#updateFull').textContent = full; $('#updateShort').textContent = short;
   b.title = title; b.setAttribute('aria-label', title);

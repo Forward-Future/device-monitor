@@ -64,7 +64,7 @@
         "zip"
       ],
       "identity": "-",
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
       "artifactName": "Device Monitor-${version}-${arch}.${ext}"
     },
     "dmg": {

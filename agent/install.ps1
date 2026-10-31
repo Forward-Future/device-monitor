@@ -1,8 +1,8 @@
 # Device Monitor installer (Windows). Served by the hub with __HUB__ / __TOKEN__ filled in.
-# Run:  irm "__HUB__/install.ps1?token=__TOKEN__" | iex
+# Run:  irm -Headers @{Authorization='Bearer __TOKEN__'} "__HUB__/install.ps1" | iex
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$hub = '__HUB__'; $token = '__TOKEN__'
+$hub = '__HUB__'; $token = '__TOKEN__'; $wantHash = '__SHA_AGENT_PS1__'
 $dir = Join-Path $env:LOCALAPPDATA 'DeviceMonitor'
 New-Item -ItemType Directory -Force $dir | Out-Null
 
@@ -10,7 +10,13 @@ New-Item -ItemType Directory -Force $dir | Out-Null
 Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like '*DeviceMonitor\agent.ps1*' } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
-Invoke-WebRequest "$hub/agent.ps1" -UseBasicParsing -OutFile (Join-Path $dir 'agent.ps1')
+$agentFile = Join-Path $dir 'agent.ps1'
+Invoke-WebRequest "$hub/agent.ps1" -UseBasicParsing -OutFile $agentFile
+# The hub pinned this hash when it issued the installer — a tampered agent script never runs.
+if ((Get-FileHash $agentFile -Algorithm SHA256).Hash.ToLower() -ne $wantHash) {
+  Remove-Item $agentFile -Force -ErrorAction SilentlyContinue
+  throw 'The agent download failed its integrity check — refusing to install.'
+}
 @{ hub = $hub; token = $token } | ConvertTo-Json | Set-Content (Join-Path $dir 'config.json') -Encoding ASCII
 
 # Hidden launcher, started at every logon from the Startup folder (no admin needed).

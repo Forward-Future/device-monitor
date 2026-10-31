@@ -56,15 +56,26 @@ const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 const DOWNLOADS_DIR = path.join(DATA_DIR, 'downloads');
 fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
 
+let dlCache = { at: 0, list: [] };
 function listDownloads() {
-  return fs.readdirSync(DOWNLOADS_DIR)
+  if (Date.now() - dlCache.at < 5000) return dlCache.list;   // statSync'ing the dir per request is free DDoS work
+  const manifests = {};
+  for (const platform of ['windows', 'mac']) {
+    try { manifests[platform] = JSON.parse(fs.readFileSync(path.join(DOWNLOADS_DIR, `update-${platform}.json`), 'utf8')); } catch {}
+  }
+  const list = fs.readdirSync(DOWNLOADS_DIR)
     .filter(f => /\.(exe|dmg|zip)$/i.test(f))
     .map(f => {
       const st = fs.statSync(path.join(DOWNLOADS_DIR, f));
       const platform = /\.exe$/i.test(f) ? 'windows' : 'mac';
-      return { name: f, platform, size: st.size, modified: st.mtimeMs };
+      // The signed manifest's hash lets a user verify a browser download by hand.
+      const m = manifests[platform];
+      const sha256 = m && m.file === f && /^[0-9a-f]{64}$/.test(m.sha256 || '') ? m.sha256 : null;
+      return { name: f, platform, size: st.size, modified: st.mtimeMs, sha256 };
     })
     .sort((a, b) => b.modified - a.modified);
+  dlCache = { at: Date.now(), list };
+  return list;
 }
 
 // Signed update manifests (written by `npm run release`). Apps verify the signature themselves;
@@ -163,8 +174,28 @@ function isLoopback(req) {
   return (a === '127.0.0.1' || a === '::1' || a === '::ffff:127.0.0.1') && !req.headers['x-forwarded-for'] && /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(req.headers.host || '');
 }
 
+// ---- Rate limiting ----------------------------------------------------------------------
+// The endpoints that don't need the key (install commands, downloads, hub info, pairing) get a
+// cheap per-IP allowance, so a noisy LAN peer can't make the hub stream installers nonstop.
+const RATE_WINDOW_MS = 60e3, RATE_MAX = 120;
+const rates = new Map();
+function rateOk(req) {
+  // Tailscale serve forwards every tailnet client as 127.0.0.1 — key on X-Forwarded-For so one
+  // busy peer can't exhaust the shared allowance.
+  const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const ip = fwd || req.socket.remoteAddress || '';
+  const now = Date.now();
+  let r = rates.get(ip);
+  if (!r || now - r.at > RATE_WINDOW_MS) { r = { at: now, n: 0 }; rates.set(ip, r); }
+  return ++r.n <= RATE_MAX;
+}
+setInterval(() => { const cut = Date.now() - RATE_WINDOW_MS; for (const [ip, r] of rates) if (r.at < cut) rates.delete(ip); }, RATE_WINDOW_MS).unref();
+const MAX_DL_STREAMS = 8;
+let dlStreams = 0;
+
 // ---- Access --------------------------------------------------------------------------
-// The dashboard and its API need the hub's key (the pairing token), except on the hub PC itself.
+// The dashboard and its API need the hub's key (the pairing token) — including on the hub PC
+// itself, so another local process or user can't take over the hub through loopback.
 // Browsers get it once from a dashboard link (/?key=…) and keep it in a cookie; the desktop app
 // sends it as a cookie or an Authorization header. Agents only use it to report.
 const keyOk = k => sec.safeEqual(k, config.token);
@@ -172,7 +203,7 @@ function requestKey(req) {
   const auth = String(req.headers.authorization || '');
   return auth.startsWith('Bearer ') ? auth.slice(7).trim() : sec.cookie(req.headers.cookie, 'dm_key');
 }
-const authorized = req => isLoopback(req) || keyOk(requestKey(req));
+const authorized = req => keyOk(requestKey(req));
 const keyCookie = req => `dm_key=${config.token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=34560000${req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : ''}`;
 
 // Desktop apps join with a short one-time code shown in the hub's Add device dialog, so the key
@@ -181,7 +212,10 @@ const PAIR_MS = 10 * 60e3;
 let pairing = null;
 
 function hubUrlFor(req) {   // Host was validated by hostAllowed()
-  return `http://${req.headers.host}`;
+  // Through `tailscale serve` the request arrives as HTTPS with X-Forwarded-Proto and a bare
+  // ts.net Host — render the matching https origin, not a dead http://<host> (port 80).
+  const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
+  return `${proto}://${req.headers.host}`;
 }
 
 function template(file, vars) {
@@ -238,7 +272,12 @@ function handleReport(raw) {
   if ((procWatch.get(id) || 0) > now) reply.procs = true;
   const queued = (commands.get(id) || []).filter(c => now - c.t < COMMAND_TTL && body.actions.includes(c.action));
   commands.delete(id);
-  if (queued.length) reply.commands = queued.map(({ id: cid, action }) => ({ id: cid, action }));
+  // Each queued action is HMAC-signed so an agent can tell a queued command from a LAN MITM
+  // injecting one into the plain-HTTP reply. Agents verify before executing.
+  if (queued.length) reply.commands = queued.map(({ id: cid, action }) => ({
+    id: cid, action,
+    sig: crypto.createHmac('sha256', String(config.token)).update(`device-monitor-cmd:${cid}:${action}`).digest('hex'),
+  }));
   return reply;
 }
 
@@ -346,6 +385,11 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
   try {
     // ---- open to anyone on the network ----
+    // (rate-limited: these paths run before the key check)
+    const open = p === '/' || p === '/index.html' || p === '/download' || p === '/download/' || p.startsWith('/download/') || p.startsWith('/api/update/')
+      || p === '/api/downloads' || p === '/api/info' || p === '/api/pair' || p === '/install.ps1' || p === '/install.sh'
+      || p === '/agent.ps1' || p === '/agent.sh' || p === '/agent-macos.sh' || p === '/uninstall.ps1' || p === '/uninstall.sh' || Object.hasOwn(STATIC, p);
+    if (open && !authorized(req) && !rateOk(req)) return send(res, 429, { error: 'too many requests' });
     if (req.method === 'GET' && (p === '/' || p === '/index.html')) {
       let key = url.searchParams.get('key');
       if (key != null) {   // a dashboard link: keep the key in a cookie and take it out of the address bar
@@ -375,12 +419,15 @@ const server = http.createServer(async (req, res) => {
       const name = path.basename(decodeURIComponent(p.slice('/download/'.length)));
       const file = listDownloads().find(d => d.name === name);
       if (!file) return send(res, 404, { error: 'not found' });
+      if (dlStreams >= MAX_DL_STREAMS) return send(res, 503, { error: 'too many downloads in progress' });
+      dlStreams++;
       res.writeHead(200, {
         ...sec.BASE_HEADERS,
         'Content-Type': 'application/octet-stream',
         'Content-Length': file.size,
         'Content-Disposition': `attachment; filename="${name.replace(/"/g, '')}"`,
       });
+      res.on('close', () => dlStreams--);
       return fs.createReadStream(path.join(DOWNLOADS_DIR, name)).on('error', () => res.destroy()).pipe(res);
     }
     if (req.method === 'GET' && p === '/api/info') {
@@ -407,10 +454,15 @@ const server = http.createServer(async (req, res) => {
       broadcast({ type: 'paired' });
       return send(res, 200, { token: config.token });
     }
-    // Installer / agent scripts. The installer needs the token; the raw agent does not contain it.
+    // Installer / agent scripts. The installer needs the token (sent as a Bearer header — the
+    // ?token= form still works for old commands but keeps the key out of URLs going forward).
+    // The reply pins the agent script's SHA-256 so the installer can check the second download.
     if (req.method === 'GET' && (p === '/install.ps1' || p === '/install.sh')) {
-      if (!keyOk(url.searchParams.get('token'))) return send(res, 403, 'echo "Invalid or missing token"\n', 'text/plain');
-      return send(res, 200, template(path.basename(p), { HUB: hubUrlFor(req), TOKEN: config.token }), 'text/plain; charset=utf-8');
+      if (!keyOk(url.searchParams.get('token') || requestKey(req))) return send(res, 403, 'echo "Invalid or missing token"\n', 'text/plain');
+      const sha256 = f => crypto.createHash('sha256').update(fs.readFileSync(path.join(ROOT, 'agent', f))).digest('hex');
+      return send(res, 200, template(path.basename(p), {
+        HUB: hubUrlFor(req), TOKEN: config.token, SHA_AGENT: sha256('agent.sh'), SHA_AGENT_MAC: sha256('agent-macos.sh'), SHA_AGENT_PS1: sha256('agent.ps1'),
+      }), 'text/plain; charset=utf-8');
     }
     if (req.method === 'GET' && (p === '/agent.ps1' || p === '/agent.sh' || p === '/agent-macos.sh' || p === '/uninstall.ps1' || p === '/uninstall.sh')) {
       return send(res, 200, fs.readFileSync(path.join(ROOT, 'agent', path.basename(p))), 'text/plain; charset=utf-8');
@@ -553,8 +605,8 @@ if (require.main === module) {
   const port = Number(process.env.PORT) || 7777;
   startHub({ port }).then(hub => {
     console.log('Device Monitor hub running');
-    console.log(`  This PC:       http://localhost:${port}`);
-    for (const a of hub.addresses) console.log(`  Other devices: http://${a.address}:${port}   (${a.name})`);
+    console.log(`  This PC:       http://localhost:${port}/?key=${hub.token}   (open this link once — the key goes in a cookie)`);
+    for (const a of hub.addresses) console.log(`  Other devices: http://${a.address}:${port}/?key=${hub.token}   (${a.name})`);
     if (!process.env.NO_LOCAL_AGENT) startAgent({ hub: `http://127.0.0.1:${port}`, token: hub.token, scriptDir: path.join(__dirname, 'agent') });
   }, e => {
     console.error(e.code === 'EADDRINUSE' ? `Port ${port} is already in use — is the hub already running?` : e);

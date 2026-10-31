@@ -37,8 +37,8 @@ function newer(a, b) {   // is version a newer than b?
 }
 
 class Updater {
-  constructor({ app, hubUrl, publicKeyPem, dir, canInstall, isBusy, isVisible, onStatus, log = console.log }) {
-    Object.assign(this, { app, hubUrl, publicKeyPem, dir, canInstall, isBusy, isVisible, onStatus, log });
+  constructor({ app, hubUrl, publicKeyPem, dir, canInstall, manualDownload, isBusy, isVisible, onStatus, log = console.log }) {
+    Object.assign(this, { app, hubUrl, publicKeyPem, dir, canInstall, manualDownload, isBusy, isVisible, onStatus, log });
     this.status = { state: publicKeyPem && PLATFORM ? 'idle' : 'unavailable', version: null, message: null, lastCheck: null };
     this.timer = null; this.checking = null; this.waitStarted = null;
     fs.mkdirSync(dir, { recursive: true });
@@ -63,11 +63,16 @@ class Updater {
   async _check() {
     const base = this.hubUrl();
     const current = this.app.getVersion();
-    const ready = this.status.state === 'ready' ? { ...this.status } : null;
+    const ready = (this.status.state === 'ready' || this.status.state === 'ready-download') ? { ...this.status } : null;
     try {
-      if (this.status.state !== 'ready') this.set({ state: 'checking', message: null });
+      if (this.status.state !== 'ready' && this.status.state !== 'ready-download') this.set({ state: 'checking', message: null });
       const res = await fetch(`${base}/api/update/${PLATFORM}`, { signal: AbortSignal.timeout(8000) });
-      if (res.status === 404) { this.set({ state: 'idle', version: null, lastCheck: Date.now() }); return this.status; }
+      if (res.status === 404) {
+        // A hub that briefly has no manifest (restarting, empty downloads dir) must not throw
+        // away an update that was already downloaded and verified.
+        this.set(ready ? { ...ready, lastCheck: Date.now() } : { state: 'idle', version: null, lastCheck: Date.now() });
+        return this.status;
+      }
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const m = await res.json();
       const problem = verifyManifest(m, this.publicKeyPem);
@@ -75,7 +80,19 @@ class Updater {
       if (!newer(m.version, current)) { this.set({ state: 'idle', version: null, lastCheck: Date.now() }); return this.status; }
 
       if (!this.canInstall()) {   // e.g. macOS without a Developer ID signature, or a dev build
-        this.set({ state: 'available', version: m.version, lastCheck: Date.now(), downloadUrl: `${base}/download` });
+        // Packaged apps still fetch + verify the installer themselves, so the file the user
+        // ends up opening was checked against the signed manifest — not whatever the LAN served.
+        if (this.manualDownload?.()) {
+          const file = path.join(this.dir, m.file);
+          if (this.status.state !== 'ready-download' || this.status.version !== m.version) {
+            this.set({ state: 'downloading', version: m.version });
+            await this.download(`${base}/download/${encodeURIComponent(m.file)}`, file, m);
+            this.readyFile = file;
+            this.set({ state: 'ready-download', version: m.version, lastCheck: Date.now(), file });
+          }
+        } else {
+          this.set({ state: 'available', version: m.version, lastCheck: Date.now(), downloadUrl: `${base}/download` });
+        }
         return this.status;
       }
       const file = path.join(this.dir, m.file);
@@ -108,9 +125,14 @@ class Updater {
         hash.update(chunk);
         if (!out.write(chunk)) await new Promise(r => out.once('drain', r));
       }
-    } finally { await new Promise(r => out.end(r)); }
-    if (size !== m.size) throw new Error('download size mismatch');
-    if (hash.digest('hex') !== m.sha256) { fs.rmSync(file, { force: true }); throw new Error('download hash mismatch'); }
+      await new Promise(r => out.end(r));
+      if (size !== m.size) throw new Error('download size mismatch');
+      if (hash.digest('hex') !== m.sha256) throw new Error('download hash mismatch');
+    } catch (e) {   // a file that failed verification is never left lying around
+      out.destroy();
+      fs.rmSync(file, { force: true });
+      throw e;
+    }
   }
 
   // Don't restart the app while someone is looking at it — but don't wait forever either.
