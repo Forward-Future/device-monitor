@@ -251,7 +251,8 @@ function setStartup(enabled) {
 function startupEnabled() {
   if (!app.isPackaged) return false;
   const s = app.getLoginItemSettings({ args: LOGIN_ARGS });
-  return s.openAtLogin && s.executableWillLaunchAtLogin !== false; // false if disabled in Task Manager
+  // executableWillLaunchAtLogin is Windows-only (false if disabled in Task Manager); Electron reports it false on macOS.
+  return s.openAtLogin && (!IS_WIN || s.executableWillLaunchAtLogin !== false);
 }
 
 // ---------------------------------------------------------------------------
