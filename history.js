@@ -41,6 +41,23 @@ function aggregate(points, width, start) {
   return out;
 }
 
+// Combine two points for the same minute (e.g. one flushed at hub shutdown, one after restart),
+// weighting averages by their sample counts. Rows written before counts were stored count as 1.
+function merge(a, b) {
+  const na = a.n || 1, nb = b.n || 1;
+  const p = { t: a.t };
+  for (const f of FIELDS) {
+    const x = a[f], y = b[f];
+    p[f] = x == null ? y ?? null : y == null ? x : +((x * na + y * nb) / (na + nb)).toFixed(2);
+  }
+  for (const f of MAX_FIELDS) {
+    const x = a[maxKey(f)], y = b[maxKey(f)];
+    p[maxKey(f)] = x == null ? y ?? null : y == null ? x : Math.max(x, y);
+  }
+  p.n = na + nb;
+  return p;
+}
+
 class HistoryStore {
   constructor(dataDir) {
     this.dir = path.join(dataDir, 'history');
@@ -60,12 +77,20 @@ class HistoryStore {
       const file = path.join(this.dir, name);
       const lines = fs.readFileSync(file, 'utf8').split('\n');
       const pts = [];
-      for (const line of lines) { if (!line) continue; try { const p = JSON.parse(line); if (p.t >= cutoff) pts.push(p); } catch {} }
+      let merged = false;
+      for (const line of lines) {
+        if (!line) continue;
+        let p; try { p = JSON.parse(line); } catch { continue; }
+        if (!(p.t >= cutoff)) continue;
+        const last = pts[pts.length - 1];
+        if (last && last.t === p.t) { pts[pts.length - 1] = { id: p.id ?? last.id, ...merge(last, p) }; merged = true; }
+        else pts.push(p);
+      }
       if (!pts.length) { fs.unlinkSync(file); continue; }
       const id = pts[pts.length - 1].id || name.slice(0, -7);
       for (const p of pts) delete p.id;
       this.minutes.set(id, pts);
-      if (pts.length < lines.length - 1) this.rewrite(id);   // drop expired lines
+      if (merged || pts.length < lines.length - 1) this.rewrite(id);   // drop expired lines and duplicate minutes
     }
   }
 
@@ -89,7 +114,13 @@ class HistoryStore {
   commit(id, pend) {
     const [p] = aggregate(pend.samples, MINUTE_MS, pend.minute);
     if (!p) return;
+    p.n = pend.samples.length;
     const mins = this.minutes.get(id) || (this.minutes.set(id, []), this.minutes.get(id));
+    if (mins.length && mins[mins.length - 1].t === p.t) {   // same minute as before a restart: merge, don't double-count
+      mins[mins.length - 1] = merge(mins[mins.length - 1], p);
+      this.rewrite(id);
+      return;
+    }
     mins.push(p);
     const cutoff = Date.now() - KEEP_MS;
     if (mins.length && mins[0].t < cutoff - 24 * 60 * 60 * 1000) {   // prune about once a day
