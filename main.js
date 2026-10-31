@@ -1,7 +1,7 @@
 // Device Monitor desktop app (Electron).
 //  - "Host" mode: runs the hub on this PC (dashboard + API on port 7777) and monitors this PC.
 //  - "Connect" mode: monitors this PC, reports to a hub elsewhere, and shows that hub's dashboard.
-const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, clipboard, Notification, session, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, clipboard, Notification, session, screen, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -77,7 +77,25 @@ ipcMain.on('dm:pref-set', (e, k, v) => {
   if (v != null && !(k in prefs) && Object.keys(prefs).length >= 50) return;
   if (v == null) delete prefs[k]; else prefs[k] = v;
   saveSettingsSoon();
+  if (k === 'theme') applyTheme();
 });
+
+// ---- Appearance ----
+// The dashboard's System/Light/Dark choice also drives Electron's theme, so the setup and offline
+// pages (prefers-color-scheme), native menus and the window chrome match it.
+const chrome = () => nativeTheme.shouldUseDarkColors
+  ? { background: '#0d0d0d', symbol: '#c3c2b7' }
+  : { background: '#f6f5f2', symbol: '#4b4a45' };
+function applyTheme() {
+  const t = settings.dashboardPrefs?.theme;
+  nativeTheme.themeSource = t === 'light' || t === 'dark' ? t : 'system';
+}
+function updateWindowChrome() {
+  if (!win || win.isDestroyed()) return;
+  const c = chrome();
+  win.setBackgroundColor(c.background);
+  if (!IS_MAC) win.setTitleBarOverlay({ color: c.background, symbolColor: c.symbol, height: 64 });
+}
 
 function normalizeHubUrl(input) {
   let s = String(input || '').trim();
@@ -260,10 +278,10 @@ function createWindow({ show }) {
   win = new BrowserWindow({
     width: 1280, height: 860, minWidth: 560, minHeight: 520, ...savedBounds(),
     ...(TEST.DM_WINDOW_SIZE ? (([w, h]) => ({ width: +w, height: +h }))(TEST.DM_WINDOW_SIZE.split('x')) : {}),
-    title: 'Device Monitor', icon: ICON, show: false, backgroundColor: '#0d0d0d',
+    title: 'Device Monitor', icon: ICON, show: false, backgroundColor: chrome().background,
     ...(IS_MAC
       ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 24 } }
-      : { titleBarStyle: 'hidden', titleBarOverlay: { color: '#0d0d0d', symbolColor: '#c3c2b7', height: 64 } }),
+      : { titleBarStyle: 'hidden', titleBarOverlay: { color: chrome().background, symbolColor: chrome().symbol, height: 64 } }),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true, sandbox: true, nodeIntegration: false, webviewTag: false, spellcheck: false,
@@ -489,6 +507,8 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
     settingsFile = path.join(app.getPath('userData'), 'settings.json');
     loadSettings();
+    applyTheme();
+    nativeTheme.on('updated', updateWindowChrome);
     // Up to 1.2.3 the sign-in entry launched with --hidden; re-register it with the current args.
     if (app.isPackaged && IS_WIN && app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin) setStartup(true);
     // The dashboard needs no browser permissions (camera, location, notifications…).

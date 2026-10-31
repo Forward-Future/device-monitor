@@ -123,7 +123,7 @@ const browsers = [
     console.log('saved', name);
   };
 
-  await go('');
+  await go('?key=' + token);   // a dashboard link: the hub sets its access cookie and redirects
   await evaluate(`localStorage.setItem('range', '1h'); localStorage.setItem('hvRange', '24h')`);
   await go('', 5000);
   await resize(580);   // just the row of cards

@@ -5,7 +5,10 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'self'; img-src 'self' data:">
 <title>Device Monitor — Setup</title>
 <style>
-  :root { color-scheme: dark; --page: #0d0d0d; --surface-1: #1a1a19; --surface-2: #232321; --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #898781; --border: rgba(255,255,255,0.10); --accent: #9085e9; --critical: #e66767; }
+  :root { color-scheme: dark; --page: #0d0d0d; --surface-1: #1a1a19; --surface-2: #232321; --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #898781; --border: rgba(255,255,255,0.10); --accent: #9085e9; --critical: #e66767; --hover: #2c2c2a; --well: #0b0b0b; --on-accent: #0b0b0b; }
+  @media (prefers-color-scheme: light) {   /* the app sets this from the dashboard's Appearance choice */
+    :root { color-scheme: light; --page: #f6f5f2; --surface-1: #ffffff; --surface-2: #eeede9; --text-primary: #1a1a19; --text-secondary: #4b4a45; --text-muted: #6e6c66; --border: rgba(0,0,0,0.12); --accent: #6b5dd3; --critical: #c42f2f; --hover: #e4e3de; --well: #f3f2ee; --on-accent: #ffffff; }
+  }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   body { margin: 0; background: var(--page); color: var(--text-primary); font: 14px/1.5 "Segoe UI Variable", "Segoe UI", system-ui, sans-serif; display: flex; flex-direction: column; }
@@ -25,12 +28,12 @@
   .opt ul { margin: 0; padding-left: 18px; color: var(--text-secondary); }
   .tag { align-self: flex-start; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); }
   button { font: inherit; color: inherit; cursor: pointer; border-radius: 8px; padding: 9px 14px; border: 1px solid var(--border); background: var(--surface-2); }
-  button:hover { background: #2c2c2a; }
-  button.primary { background: var(--accent); border-color: transparent; color: #0b0b0b; font-weight: 600; }
+  button:hover { background: var(--hover); }
+  button.primary { background: var(--accent); border-color: transparent; color: var(--on-accent); font-weight: 600; }
   button.primary:hover { filter: brightness(1.08); background: var(--accent); }
   button:disabled { opacity: .6; cursor: default; }
   .spacer { flex: 1; }
-  input { font: inherit; color: var(--text-primary); background: #0b0b0b; border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; width: 100%; }
+  input { font: inherit; color: var(--text-primary); background: var(--well); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; width: 100%; }
   input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   .row { display: flex; gap: 8px; }
   .found { display: flex; flex-direction: column; gap: 6px; }

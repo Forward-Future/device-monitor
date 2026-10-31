@@ -5,15 +5,18 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'self'">
 <title>Device Monitor — Hub offline</title>
 <style>
-  :root { color-scheme: dark; }
-  body { margin: 0; height: 100vh; background: #0d0d0d; color: #f0efec; font: 14px/1.5 "Segoe UI Variable", "Segoe UI", system-ui, sans-serif; display: flex; flex-direction: column; }
+  :root { color-scheme: dark; --page: #0d0d0d; --surface-2: #232321; --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #898781; --border: rgba(255,255,255,.1); --accent: #9085e9; --on-accent: #0b0b0b; }
+  @media (prefers-color-scheme: light) {   /* the app sets this from the dashboard's Appearance choice */
+    :root { color-scheme: light; --page: #f6f5f2; --surface-2: #eeede9; --text-primary: #1a1a19; --text-secondary: #4b4a45; --text-muted: #6e6c66; --border: rgba(0,0,0,.12); --accent: #6b5dd3; --on-accent: #ffffff; }
+  }
+  body { margin: 0; height: 100vh; background: var(--page); color: var(--text-primary); font: 14px/1.5 "Segoe UI Variable", "Segoe UI", system-ui, sans-serif; display: flex; flex-direction: column; }
   .titlebar { height: 64px; flex: none; -webkit-app-region: drag; }
   main { flex: 1; display: grid; place-items: center; text-align: center; padding: 24px; }
   h1 { font-size: 20px; font-weight: 600; margin: 0 0 6px; }
-  p { color: #c3c2b7; margin: 0 0 18px; }
-  .hint { color: #898781; font-size: 12px; margin-top: 14px; }
-  button { font: inherit; color: inherit; cursor: pointer; border-radius: 8px; padding: 8px 14px; border: 1px solid rgba(255,255,255,.1); background: #232321; margin: 0 4px; }
-  button.primary { background: #9085e9; color: #0b0b0b; border-color: transparent; font-weight: 600; }
+  p { color: var(--text-secondary); margin: 0 0 18px; }
+  .hint { color: var(--text-muted); font-size: 12px; margin-top: 14px; }
+  button { font: inherit; color: inherit; cursor: pointer; border-radius: 8px; padding: 8px 14px; border: 1px solid var(--border); background: var(--surface-2); margin: 0 4px; }
+  button.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; font-weight: 600; }
 </style>
 </head>
 <body>
