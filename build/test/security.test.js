@@ -246,6 +246,41 @@ test('Tailscale fresh reads coalesce simultaneous CLI launches and enforce a coo
   assert.equal((await mod.setHttps(7777,false)).ok,false);
   await Promise.all(operations);assert.equal(calls,5);
 });
+test('Tailscale rotation proofs fetch only the local public certificate and bound CLI work',async()=>{
+  const commands=[];
+  const mod=loadModule('tailscale.js',{fs:{statSync:()=>({isFile:()=>true})},child_process:{execFile:(exe,args,opts,cb)=>{
+    commands.push(Array.from(args));setImmediate(()=>cb(null,'public certificate',''));
+  }}},{process:{platform:'linux',env:{}}});
+  const host='machine.tail0000.ts.net';
+  assert.equal(await mod.publicCertificate('--another-flag.ts.net'),null);
+  assert.equal(await mod.publicCertificate('elsewhere.test'),null);
+  const responses=await Promise.all(Array.from({length:20},()=>mod.publicCertificate(host)));
+  assert(responses.every(r=>r==='public certificate'));
+  assert.deepEqual(commands,[['cert','--cert-file=-',host]]);
+  assert.equal(await mod.publicCertificate(host),null);
+});
+
+test('desktop continuity is HTTPS-only, origin-bound and revoked with its enrollment',async t=>{
+  const {desktopKey,credentialDigest,mac}=require('../../desktop-identity');
+  const {h,call,invite}=await fixture(t);
+  const pair=async id=>(await call('/api/pair',{remote:true,method:'POST',key:await invite('desktop',id)})).json();
+  const old=await pair();
+  assert.equal((await call('/api/report',{method:'POST',key:old.agent,body:{id:old.id}})).status,200);
+  function challenge(e,origin='https://hub.test') {
+    const key=desktopKey(credentialDigest(e.agent),credentialDigest(e.client)),nonce=crypto.randomBytes(32).toString('base64url');
+    return {nonce,lookup:mac(key,'lookup'),challenge:mac(key,'desktop',origin,nonce)};
+  }
+  const proof=(body,remote=true)=>call('/api/desktop/tls-proof',{remote,method:'POST',body});
+  assert.equal((await proof(challenge(old),false)).status,403);
+  assert.equal((await proof(challenge(old,'https://other.test'))).status,403);
+  // An authorized request still cannot get a proof without a trusted TLS source.
+  assert.equal((await proof(challenge(old))).status,503);
+  const replacement=await pair(old.id);
+  assert.equal((await proof(challenge(old))).status,403);
+  assert.equal((await proof(challenge(replacement))).status,503);
+  assert.equal((await call('/api/devices/'+old.id,{method:'DELETE',key:h.localKey})).status,200);
+  assert.equal((await proof(challenge(replacement))).status,403);
+});
 test('cleartext claims and forwarded public addresses cannot enable remote enrollment',async t=>{
   const {call,invite}=await fixture(t);const ticket=await invite('desktop');
   for (const headers of [{'X-Forwarded-Proto':'http'},{'X-Forwarded-For':'203.0.113.1'},{Host:'other.test'}])
@@ -269,19 +304,34 @@ test('a slow download peer cannot reserve the entire pool',async t=>{
   assert.ok(streams.every(stream=>stream.fd === null));
 });
 
-test('real TLS sends credentials only on the enrolled connection and rejects redirects',async t=>{
-  const cp=require('node:child_process'),https=require('node:https'),execFile=require('node:util').promisify(cp.execFile);
-  const dir=temp(t), windowsSSL=path.join(process.env.ProgramFiles||'C:/Program Files','Git','usr','bin','openssl.exe');
+async function testCertificates(dir, hosts, trusted) {
+  const execFile=require('node:util').promisify(require('node:child_process').execFile);
+  const windowsSSL=path.join(process.env.ProgramFiles||'C:/Program Files','Git','usr','bin','openssl.exe');
   const openssl=process.platform==='win32' && fs.existsSync(windowsSSL)?windowsSSL:'openssl';
   const certs=[];
   const config=path.join(dir,'openssl.cnf');
-  fs.writeFileSync(config,'[req]\ndistinguished_name = dn\nx509_extensions = test\nprompt = no\n[dn]\nCN = 127.0.0.1\n[test]\nsubjectAltName = IP:127.0.0.1\nbasicConstraints = critical,CA:TRUE\n');
-  for(const i of [0,1]){
+  for(const [i, san] of hosts.entries()){
+    fs.writeFileSync(config,'[req]\ndistinguished_name = dn\nx509_extensions = test\nprompt = no\n[dn]\nCN = test\n[test]\nsubjectAltName = '+san+'\nbasicConstraints = critical,CA:TRUE\n');
     const key=path.join(dir,i+'.key'),cert=path.join(dir,i+'.crt');
     await execFile(openssl,['req','-x509','-newkey','rsa:2048','-nodes','-days','1','-config',config,'-subj','/CN=synthetic-hub-'+i,'-keyout',key,'-out',cert],{windowsHide:true});
     certs.push({key:fs.readFileSync(key),cert:fs.readFileSync(cert)});
   }
-  const ca=path.join(dir,'trusted.pem');fs.writeFileSync(ca,Buffer.concat(certs.map(c=>c.cert)));
+  const ca=path.join(dir,'trusted.pem');fs.writeFileSync(ca,Buffer.concat(trusted.map(i=>certs[i].cert)));
+  return {certs,ca};
+}
+
+test('paired desktops recover from TLS rotation without releasing credentials to an impostor',async t=>{
+  const execFile=require('node:util').promisify(require('node:child_process').execFile);
+  const dir=temp(t), ip='IP:127.0.0.1';
+  const {ca}=await testCertificates(dir,[ip,ip,ip,ip,'DNS:wrong.test'],[0,1,2,4]);
+  await execFile(process.execPath,[path.join(__dirname,'desktop-rotation.cjs'),dir],{
+    env:{...process.env,NODE_EXTRA_CA_CERTS:ca},windowsHide:true,timeout:45000
+  });
+});
+
+test('real TLS sends credentials only on the enrolled connection and rejects redirects',async t=>{
+  const https=require('node:https'),execFile=require('node:util').promisify(require('node:child_process').execFile);
+  const dir=temp(t), {certs,ca}=await testCertificates(dir,['IP:127.0.0.1','IP:127.0.0.1'],[0,1]);
   let accepted=0,wrongPeer=0,redirected=0,changed=false;
   const tlsServer=https.createServer(certs[0],(req,res)=>{
     if(req.url==='/redirect'){res.writeHead(302,{Location:'/redirected'});res.end();return;}

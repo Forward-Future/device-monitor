@@ -5,6 +5,7 @@ const https = require('https');
 const { pipeline } = require('node:stream/promises');
 const transport = require('./transport');
 const { Access, bearer, localOperatorLink } = require('./access');
+const { mac } = require('./desktop-identity');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -50,7 +51,7 @@ function lanAddresses() {
 }
 
 // Starts the hub. Resolves with { port, token, close } once listening.
-function startHub({ port = 7777, dataDir, rootDir = __dirname, assetDir = rootDir, fixture = false, headlessInvites = false, publicUrl = fixture ? null : process.env.DM_HTTPS_ORIGIN, tlsOptions } = {}) {
+function startHub({ port = 7777, dataDir, rootDir = __dirname, assetDir = rootDir, fixture = false, headlessInvites = false, publicUrl = fixture ? null : process.env.DM_HTTPS_ORIGIN, tlsOptions, proxyCertFile = fixture ? null : process.env.DM_TLS_PROXY_CERT } = {}) {
 let PORT = port;
 const configuredOrigin = transport.origin(publicUrl);
 if (publicUrl && !configuredOrigin) throw new Error('DM_HTTPS_ORIGIN must be a bare HTTPS origin');
@@ -199,15 +200,15 @@ function send(res, status, body, type = 'application/json') {
 
 let activeBodies = 0;
 const bodyPeers = new Map();
-async function readBody(req) {
+async function readBody(req, limit = 1e6) {
   const peer = peerAddress(req), count = bodyPeers.get(peer) || 0;
   if (count >= 4 || activeBodies >= 32) throw Object.assign(new Error('Too many active requests'), { status: 429 });
-  if (Number(req.headers['content-length']) > 1e6) throw Object.assign(new Error('Body too large'), { status: 413 });
+  if (Number(req.headers['content-length']) > limit) throw Object.assign(new Error('Body too large'), { status: 413 });
   const initial = principal(req);
   activeBodies++; bodyPeers.set(peer, count + 1);
   const timer = setTimeout(() => req.destroy(), 10000);
   try {
-    const bytes = await transport.readBytes(req, 1e6);
+    const bytes = await transport.readBytes(req, limit);
     const current = principal(req);
     if (initial && (!current || current.role !== initial.role || current.id !== initial.id)) throw Object.assign(new Error('Credential revoked'), {status:401});
     return bytes.length ? JSON.parse(bytes.toString('utf8')) : {};
@@ -275,6 +276,25 @@ function audience(req) {
   const peer = String(req.headers['x-forwarded-for'] || '').trim();
   return LOOPBACK.has(req.socket.remoteAddress) && req.headers['x-forwarded-proto'] === 'https' &&
     net.isIP(peer) && sec.isLocalAddress(peer) ? expected : null;
+}
+
+// A forwarded request cannot tell us which key terminated TLS. Never sign a
+// pin from a client, a forwarded header or a DNS lookup of the public origin.
+async function servedTlsPin(req, dest) {
+  if (req.socket.encrypted) return transport.publicKeyPin(req.socket.getCertificate());
+  const host = new URL(dest).hostname.replace(/^\[|\]$/g, '');
+  let pem;
+  if (proxyCertFile) {
+    const stat = await fs.promises.stat(proxyCertFile);
+    if (stat.isFile() && stat.size <= 65536) pem = await fs.promises.readFile(proxyCertFile);
+  } else if (!fixture && transport.origin(remote.httpsUrl) === dest && remote.dnsName?.toLowerCase() === host) {
+    pem = await tailscale.publicCertificate(host);
+  }
+  if (!pem) return null;
+  const cert = new crypto.X509Certificate(pem), now = Date.now();
+  if (Date.parse(cert.validFrom) > now || Date.parse(cert.validTo) <= now ||
+      !(net.isIP(host) ? cert.checkIP(host) : cert.checkHost(host))) return null;
+  return transport.publicKeyPin(cert);
 }
 const principal = req => access.principal(bearer(req), directLocal(req));
 const isDashboard = who => who && ['root', 'operator', 'client', 'browser'].includes(who.role);
@@ -460,6 +480,16 @@ const handler = async (req, res) => {
     if (req.method === 'GET' && (p === '/' || p === '/index.html')) return sendHtml(res, 'index.html');
     if (req.method === 'GET' && p === '/pair') return send(res, 200, 'Paste this complete invitation into Device Monitor → Connect on the computer you want to enroll.', 'text/plain; charset=utf-8');
     if (req.method === 'GET' && p === '/unlock') return sendHtml(res, 'locked.html');
+    if (req.method === 'POST' && p === '/api/desktop/tls-proof') {
+      if (!routeOrigin.startsWith('https:')) return send(res, 403, {error:'HTTPS required'});
+      const body = await readBody(req, 1024);
+      const key = access.desktopProofKey(body, routeOrigin);
+      if (!key) return send(res, 403, {error:'Desktop proof refused'});
+      const pin = await servedTlsPin(req, routeOrigin).catch(() => null);
+      if (!pin) return send(res, 503, {error:'Hub TLS identity is temporarily unavailable'});
+      if (access.desktopProofKey(body, routeOrigin) !== key) return send(res, 403, {error:'Desktop proof refused'});
+      return send(res, 200, {proof:mac(key, 'hub', routeOrigin, body.nonce, pin)});
+    }
     if (req.method === 'POST' && (p === '/api/session' || p === '/api/pair')) {
       const kind = p === '/api/session' ? 'browser' : 'desktop';
       const member = access.redeem(bearer(req), kind, routeOrigin);

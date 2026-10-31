@@ -1,7 +1,7 @@
 {
   "name": "device-monitor",
   "productName": "Device Monitor",
-  "version": "1.2.30",
+  "version": "1.2.31",
   "description": "Monitor CPU, GPU, memory and temperatures across all your devices",
   "main": "main.js",
   "author": "Matt",
@@ -23,6 +23,7 @@
       "preload.js",
       "server.js",
       "access.js",
+      "desktop-identity.js",
       "transport.js",
       "agent-runner.js",
       "discovery.js",

@@ -4,8 +4,8 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { isValidId, safeEqual } = require('./security');
+const { credentialDigest: digest, desktopKey, mac } = require('./desktop-identity');
 const secret = () => crypto.randomBytes(32).toString('base64url');
-const digest = s => crypto.createHash('sha256').update(s).digest('hex');
 const validKey = s => typeof s === 'string' && /^[A-Za-z0-9_-]{43}$/.test(s);
 const bearer = req => /^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization || '')?.[1] || '';
 const INVITE_TTL = 10 * 60e3, SESSION_TTL = 8 * 60 * 60e3;
@@ -50,6 +50,7 @@ class Access {
       if (!writeJson(file, config) || !writeJson(file, config)) throw new Error('Could not retire the legacy hub credential');
     }
     this.index = new Map();
+    this.desktopKeys = new Map();
     for (const [id, row] of Object.entries(this.config.identities)) this.indexRow(id, row);
     this.localAgent = secret();
   }
@@ -89,7 +90,24 @@ class Access {
   }
   indexRow(id, row) {
     if (row.agent) this.index.set(row.agent, { role: 'agent', id });
-    if (row.client) this.index.set(row.client, { role: 'client', id });
+    if (row.client) {
+      this.index.set(row.client, { role: 'client', id });
+      const key = desktopKey(row.agent, row.client);
+      if (key) this.desktopKeys.set(mac(key, 'lookup'), key);
+    }
+  }
+  unindexRow(row) {
+    this.index.delete(row.agent);
+    if (row.client) {
+      this.index.delete(row.client);
+      const key = desktopKey(row.agent, row.client);
+      if (key) this.desktopKeys.delete(mac(key, 'lookup'));
+    }
+  }
+  desktopProofKey(body, origin) {
+    if (!validKey(body?.lookup) || !validKey(body.nonce) || !validKey(body.challenge)) return null;
+    const key = this.desktopKeys.get(body.lookup);
+    return key && safeEqual(body.challenge, mac(key, 'desktop', origin, body.nonce)) ? key : null;
   }
   principal(key, local = false) {
     if (!validKey(key)) return null;
@@ -133,7 +151,7 @@ class Access {
     const row = { agent: digest(agent), ...(client ? { client: digest(client) } : {}) };
     Object.defineProperty(rows, id, { value: row, configurable: true, enumerable: true, writable: true });
     try { this.save(); } catch (e) { if (prior) rows[id] = prior; else delete rows[id]; throw e; }
-    if (prior) { this.index.delete(prior.agent); this.index.delete(prior.client); }
+    if (prior) this.unindexRow(prior);
     this.revokeDerived(id);
     this.indexRow(id, row);
     return { id, agent, ...(client ? { client } : {}) };
@@ -142,7 +160,7 @@ class Access {
     const rows = this.config.identities, prior = Object.hasOwn(rows, id) && rows[id];
     if (prior) {
       delete rows[id]; try { this.save(); } catch (e) { rows[id] = prior; throw e; }
-      this.index.delete(prior.agent); this.index.delete(prior.client);
+      this.unindexRow(prior);
     }
     this.revokeDerived(id);
   }

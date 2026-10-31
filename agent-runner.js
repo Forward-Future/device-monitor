@@ -4,7 +4,7 @@ const { spawn } = require('child_process');
 const path = require('path');
 const { hubJson } = require('./transport');
 
-function startAgent({ hub, token, pin, deviceId, scriptDir, appVersion = '', log = console.log }) {
+function startAgent({ hub, token, pin, trust, deviceId, scriptDir, appVersion = '', log = console.log }) {
   let child, timer, stopped = false, sending = false;
   let request;
   function report(line) {
@@ -16,7 +16,7 @@ function startAgent({ hub, token, pin, deviceId, scriptDir, appVersion = '', log
     sending = true;
     request = new AbortController();
     const signal = AbortSignal.any([request.signal, AbortSignal.timeout(5000)]);
-    hubJson(hub, '/api/report', { method: 'POST', token, pin, body: JSON.stringify(body), signal })
+    hubJson(hub, '/api/report', { method: 'POST', token, pin, trust, body: JSON.stringify(body), signal })
       .catch(() => {}).finally(() => { sending = false; request = null; });
   }
   function run() {

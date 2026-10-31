@@ -29,6 +29,7 @@ const TRAY_ICON = path.join(__dirname, 'build', IS_MAC ? 'trayTemplate.png' : 't
 const AGENT_DIR = path.join(__dirname, 'agent').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
 
 let win = null, tray = null, hub = null, agent = null, updater = null, quitting = false;
+let clientTrust = null;
 const IS_WIN = process.platform === 'win32';
 // Public half of the release key (see build/release.js); without it, updates are disabled.
 const UPDATE_KEY = (() => { try { return fs.readFileSync(path.join(__dirname, 'build', 'update-key.pub.pem'), 'utf8'); } catch { return null; } })();
@@ -84,22 +85,8 @@ const DASHBOARD = 'dmapp://dashboard/';
 function endpoint() {
   if (settings.mode === 'host' && hub) return { base: 'http://127.0.0.1:' + hub.port, token: hub.localKey };
   const e = settings.enrollment;
-  if (settings.mode === 'client' && e) return { base: settings.hubUrl, token: e.client, pin: e.pin };
+  if (settings.mode === 'client' && e && clientTrust) return { base: settings.hubUrl, token: e.client, trust: clientTrust };
   return null;
-}
-async function pairWithHub(link) {
-  const u = new URL(String(link).trim());
-  const code = new URLSearchParams(u.hash.slice(1)).get('join');
-  if (!transport.origin(u.origin) || u.username || u.password || u.pathname !== '/pair' || u.search || !validKey(code)) {
-    throw new Error('Paste the complete HTTPS desktop invitation copied from the hub.');
-  }
-  // The origin comes from the out-of-band invitation, never a discovery
-  // result. Bind the actual redemption connection and every later use to it.
-  const probe = await transport.hubJson(u.origin, '/api/info');
-  if (!probe.pin || probe.json.app !== 'device-monitor') throw new Error('The address is not a verified Device Monitor hub.');
-  const { json } = await transport.hubJson(u.origin, '/api/pair', { method: 'POST', token: code, pin: probe.pin });
-  if (!validKey(json.client) || !validKey(json.agent) || !sec.isValidId(json.id)) throw new Error('Invalid enrollment response.');
-  return { base: u.origin, enrollment: { client: json.client, agent: json.agent, id: json.id, pin: probe.pin } };
 }
 function offlineFor(e, repair) {
   if (settings.mode !== 'client' || endpoint()?.token !== e.token || !win || win.isDestroyed() || !win.webContents.getURL().startsWith(DASHBOARD)) return;
@@ -128,12 +115,13 @@ function dashboardProtocol() {
       // or response headers from a hub into the native application's origin.
       return new Response(data, { status:res.statusCode, headers: { 'Content-Type':live ? 'text/event-stream' : 'application/json', 'X-Content-Type-Options':'nosniff', 'Cache-Control':'no-store', 'Content-Security-Policy':"default-src 'none'; sandbox" } });
     } catch (error) {
-      if (u.pathname === '/api/stream' && !request.signal.aborted) offlineFor(e, /identity changed|certificat/i.test(error.message));
-      return Response.json({ error:'Cannot reach the enrolled hub. Check HTTPS and its enrolled certificate key.' }, {status:502});
+      if (u.pathname === '/api/stream' && !request.signal.aborted) offlineFor(e, false);
+      return Response.json({ error:'Cannot reach or verify the enrolled HTTPS hub.' }, {status:502});
     }
   });
 }
 async function stopServices() {
+  clientTrust?.close(); clientTrust = null;
   agent?.stop(); hub?.close(); agent = hub = null;
 }
 async function startServices() {
@@ -143,8 +131,12 @@ async function startServices() {
     hub = await startHub({ port:fixture ? 0 : PORT, fixture, dataDir:path.join(app.getPath('userData'),'hub'), rootDir:__dirname });
     if (!fixture) agent = startAgent({ hub:'http://127.0.0.1:' + hub.port, token:hub.agentToken, scriptDir:AGENT_DIR, appVersion:app.getVersion() });
   } else if (settings.mode === 'client' && settings.enrollment) {
-    const {agent:token, id, pin} = settings.enrollment;
-    agent = startAgent({hub:settings.hubUrl, token, deviceId:id, pin, scriptDir:AGENT_DIR, appVersion:app.getVersion()});
+    const {hubUrl, enrollment} = settings;
+    clientTrust = transport.desktopTrust(hubUrl, enrollment, () => {
+      if (settings.mode !== 'client' || settings.hubUrl !== hubUrl || settings.enrollment !== enrollment) throw new Error('Desktop enrollment changed.');
+      saveSettings();
+    });
+    agent = startAgent({hub:hubUrl, token:enrollment.agent, deviceId:enrollment.id, trust:clientTrust, scriptDir:AGENT_DIR, appVersion:app.getVersion()});
   }
   buildTrayMenu();
 }
@@ -353,7 +345,7 @@ handle('dm:setup', async (_e, { mode, hubUrl } = {}) => {
         throw e;
       }
     } else {
-      const { base, enrollment } = await pairWithHub(hubUrl);
+      const { base, enrollment } = await transport.pairWithHub(hubUrl);
       settings = { ...settings, mode:'client', hubUrl:base, enrollment };
       await startServices();
     }
@@ -437,7 +429,7 @@ if (!app.requestSingleInstanceLock()) {
       request: async (url, {signal}) => {
         const e = endpoint(), u = new URL(url);
         if (!e || e.base !== u.origin) throw new Error('Update origin changed');
-        const {res} = await transport.hubRequest(e.base, u.pathname + u.search, {pin:e.pin, signal, timeout:60000});
+        const {res} = await transport.hubRequest(e.base, u.pathname + u.search, {trust:e.trust, signal, timeout:60000});
         return new Response(Readable.toWeb(res), {status:res.statusCode});
       },
       canInstall: () => app.isPackaged && IS_WIN && settings.autoUpdate !== false,

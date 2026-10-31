@@ -26,6 +26,22 @@ function run(args, timeout = 8000) {
     (e, out, err) => resolve({ ok: !e, out: String(out || ''), err: String(err || (e && e.message) || '') })));
 }
 
+// Export only the public certificate of the locally configured Serve site.
+// Concurrent proofs share the command. Fail temporarily during the cooldown
+// rather than attesting a cached key after another rotation.
+let certLookup, lastCertLookup = 0;
+function publicCertificate(host) {
+  if (!/^[a-z0-9][a-z0-9.-]*\.ts\.net$/i.test(host)) return Promise.resolve(null);
+  if (certLookup?.host === host) return certLookup.pending;
+  if (certLookup || Date.now() - lastCertLookup < 1000) return Promise.resolve(null);
+  lastCertLookup = Date.now();
+  const pending = run(['cert', '--cert-file=-', host], 5000)
+    .then(r => r.ok && r.out.length <= 65536 ? r.out : null)
+    .finally(() => { certLookup = null; });
+  certLookup = {host, pending};
+  return pending;
+}
+
 const statusCache = new Map();
 function status(port, { fresh = false } = {}) {
   const now = Date.now(), prior = statusCache.get(port);
@@ -108,4 +124,4 @@ async function peerUrls(port = 7777) {
   return out.slice(0, 40);
 }
 
-module.exports = { status, setHttps, peerUrls, installed: () => !!cli() };
+module.exports = { status, setHttps, peerUrls, publicCertificate, installed: () => !!cli() };
