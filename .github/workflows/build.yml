@@ -28,6 +28,7 @@ jobs:
         with:
           node-version: 22
       - run: npm ci
+      - run: npm test
       - run: npm run ${{ matrix.script }} -- --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'   # no signing certificate; macOS build is ad-hoc signed

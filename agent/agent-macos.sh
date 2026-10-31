@@ -1,11 +1,13 @@
 #!/bin/bash
 # Device Monitor agent for macOS (Apple Silicon and Intel). No sudo needed.
-# Usage: agent-macos.sh <hub-url> <token>   (or HUB/TOKEN in a "config" file next to this script)
+# A standalone enrollment supplies HTTPS origin, device ID and credential in config.
 # Written for the bash 3.2 and BSD tools that ship with macOS.
 DIR="$(cd "$(dirname "$0")" && pwd)"
-[ -f "$DIR/config" ] && . "$DIR/config"
-HUB="${1:-$HUB}"; TOKEN="${2:-$TOKEN}"; INTERVAL="${INTERVAL:-2}"
-if [ -z "$HUB" ] || [ -z "$TOKEN" ]; then echo "usage: $0 <hub> <token>"; exit 1; fi
+[ "$DM_REPORT_PIPE" != 1 ] && [ -f "$DIR/config" ] && . "$DIR/config"
+INTERVAL="${INTERVAL:-2}"
+if [ "$DM_REPORT_PIPE" != 1 ]; then
+  [[ "$HUB" == https://* && -n "$DEVICE_ID" && "$TOKEN" =~ ^[A-Za-z0-9_-]{43}$ ]] || { echo 'Re-enroll with an HTTPS agent invitation' >&2; exit 1; }
+fi
 HUB="${HUB%/}"
 export LC_ALL=C
 export PATH="$PATH:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin"   # launchd gives a minimal PATH
@@ -169,7 +171,11 @@ while true; do
   [ -n "$SMCTEMP" ] && CPU_TEMP="$(num "$("$SMCTEMP" -c 2>/dev/null | head -1)")"
   UPTIME=$(( $(date +%s) - ${BOOT:-$(date +%s)} ))
 
-  BODY="{\"id\":\"$(esc "$ID")\",\"token\":\"$TOKEN\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"macos\",\"appVersion\":\"$(esc "${DM_APP_VERSION:-}")\",\"os\":\"$(esc "$OS")\",\"formFactor\":\"$FORM\",\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$(num "$THREADS"),\"clockMHz\":null,\"temp\":$CPU_TEMP,\"usage\":$CPU,\"cores\":[]},\"memory\":{\"total\":$MEM_TOTAL,\"used\":$(memory_used)},\"gpus\":[$(gpus_json)],\"disks\":[$(disks_json)],$RATES,\"ai\":${AI:-null}}"
-  curl -fsS -m 5 -X POST -H 'Content-Type: application/json' --data-binary "$BODY" "$HUB/api/report" >/dev/null 2>&1
+  BODY="{\"id\":\"$(esc "${DEVICE_ID:-$ID}")\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"macos\",\"appVersion\":\"$(esc "${DM_APP_VERSION:-}")\",\"os\":\"$(esc "$OS")\",\"formFactor\":\"$FORM\",\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$(num "$THREADS"),\"clockMHz\":null,\"temp\":$CPU_TEMP,\"usage\":$CPU,\"cores\":[]},\"memory\":{\"total\":$MEM_TOTAL,\"used\":$(memory_used)},\"gpus\":[$(gpus_json)],\"disks\":[$(disks_json)],$RATES,\"ai\":${AI:-null}}"
+  if [ "$DM_REPORT_PIPE" = 1 ]; then
+    printf '%s\n' "$BODY"
+  else
+    printf '%s' "$BODY" | curl -q --proto '=https' -fsS -m 5 -H @/dev/fd/3 -H 'Content-Type: application/json' --data-binary @- "$HUB/api/report" 3<<<"Authorization: Bearer $TOKEN" >/dev/null 2>&1
+  fi
   sleep $(( INTERVAL > 1 ? INTERVAL - 1 : 1 ))
 done

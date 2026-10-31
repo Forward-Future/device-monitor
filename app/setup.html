@@ -54,7 +54,7 @@
       <ul>
         <li>Monitors this PC automatically</li>
         <li>View it from phones and other PCs in a browser</li>
-        <li class="win-only">Windows will ask once to allow network access</li>
+        <li class="win-only">Direct HTTPS can request firewall access on Windows</li>
         <li class="mac-only">macOS may ask to allow incoming connections. Click Allow</li>
       </ul>
       <div class="spacer"></div>
@@ -64,10 +64,8 @@
       <span class="tag">Any other PC</span>
       <h2>Connect to a hub</h2>
       <p>Adds this PC to an existing dashboard and lets you view it here.</p>
-      <div class="found" id="found"><span class="busy" id="scan">Looking for hubs on your network…</span></div>
-      <div class="row"><input id="addr" placeholder="Hub address, e.g. 192.168.1.20" spellcheck="false"><button class="primary" id="connectBtn">Connect</button></div>
-      <div class="row" id="codeRow" hidden><input id="code" placeholder="Pairing code, e.g. 123 456" inputmode="numeric" autocomplete="one-time-code" spellcheck="false"></div>
-      <div class="hint">The address and a pairing code are shown on the hub: click <b>+</b> (Add device) → Desktop app. You can also paste the hub's dashboard link.</div>
+      <div class="row"><input id="addr" placeholder="Paste the HTTPS desktop invitation" aria-label="Desktop invitation" autocomplete="off" spellcheck="false"><button class="primary" id="connectBtn">Connect</button></div>
+      <div class="hint">On the trusted hub, choose + → Desktop app and copy the one-time invitation. Its address and enrollment secret travel together.</div>
     </section>
   </div>
   <p class="error" id="err"></p>

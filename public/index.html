@@ -339,12 +339,14 @@
   <label class="hint">Hub address the device should connect to:
     <select id="hubSel"></select>
   </label>
+  <label class="hint">Enrollment <select id="enrollDevice"><option value="">New device</option></select></label>
+  <button class="btn" id="enableHttps" hidden>Enable Tailscale HTTPS on this hub</button>
   <div class="tabs seg" id="osTabs"><button data-os="win" class="on">Windows command</button><button data-os="app">Desktop app (Windows / Mac)</button><button data-os="linux">Mac / Linux command</button></div>
   <div class="cmd" id="cmdRow"><code id="cmd"></code><button class="btn" id="copyBtn">Copy</button></div>
   <div class="hint" id="cmdHint"></div>
-  <div class="pair" id="pairRow" hidden><span class="hint">Pairing code</span><b id="pairCode">––– –––</b><span class="hint" id="pairHint"></span></div>
+  <div class="pair" id="pairRow" hidden><span class="hint">Desktop invitation</span><code id="pairCode" style="overflow-wrap:anywhere;user-select:all"></code> <button class="btn" id="copyPair">Copy</button><span class="hint" id="pairHint"></span></div>
   <h3 style="margin-top:22px">View from another device</h3>
-  <p style="margin-bottom:8px">Open this link on any phone, tablet or computer on your network. It includes the dashboard's access key, so only share it with your own devices.</p>
+  <p style="margin-bottom:8px">Open this link on any phone, tablet or computer on your network. It is a single-use, ten-minute invitation for one browser tab.</p>
   <div class="cmd"><code id="viewUrl"></code><button class="btn" id="copyView">Copy</button></div>
   <div class="dlg-foot"><button class="btn" id="addDone">Done</button></div>
 </dialog>
@@ -355,7 +357,7 @@
   </div>
   <div class="set-section app-only">
     <div class="set-row"><div class="set-text"><div class="set-k">This computer</div><div class="set-v" id="setRole"></div></div><button class="btn" id="setChange">Change setup…</button></div>
-    <div class="set-row" id="setLinkRow"><div class="set-text"><div class="set-k">Dashboard link</div><div class="set-v mono" id="setLink"></div><div class="set-v hint">Copy includes the access key: open it once on a phone or browser to unlock the dashboard there.</div></div><button class="btn" id="setCopy">Copy</button></div>
+    <div class="set-row" id="setLinkRow"><div class="set-text"><div class="set-k">Dashboard link</div><div class="set-v mono" id="setLink"></div><div class="set-v hint">Copy a single-use browser invitation. Remote access requires the hub’s HTTPS address.</div></div><button class="btn" id="setCopy">Copy</button></div>
     <div class="set-row" id="setFwRow"><div class="set-text"><div class="set-k">Network access</div><div class="set-v hint" id="setFwHint">Let phones and other computers on your network open this dashboard.</div></div><button class="btn" id="setFw">Allow…</button></div>
   </div>
   <div class="set-section app-only">
@@ -372,11 +374,15 @@
       <div class="price-body" id="setTouBox" hidden><div class="tou" id="setTou"></div><button class="btn tou-add" id="setTouAdd">+ Add time period</button></div></div>
   </div>
   </details>
-  <div class="dlg-foot"><span class="hint app-only" id="setVersion"></span><span class="spacer"></span><button class="btn app-only" id="setQuit">Quit app</button><button class="btn primary" id="setDone" autofocus>Done</button></div>
+  <div class="dlg-foot"><span class="hint app-only" id="setVersion"></span><span class="spacer"></span><button class="btn" id="revokeSessions" hidden>Revoke browser access</button><button class="btn" id="signOut" hidden>Sign out of this tab</button><button class="btn app-only" id="setQuit">Quit app</button><button class="btn primary" id="setDone" autofocus>Done</button></div>
 </dialog>
 
 
+<script src="/session.js"></script>
 <script>
+if (!nativeDashboard && !sessionStorage.getItem('dm.session')) {
+  location.replace('/unlock');
+} else {
 const $ = (s, el = document) => el.querySelector(s);
 // Preferences live in browser storage; the desktop app keeps a copy too, so they survive the app
 // reaching the hub at a different address (each address has its own storage).
@@ -704,7 +710,7 @@ function startDrag(e, id) {
     const changed = ids.some((id, i) => devices.get(id)?.order !== i);
     ids.forEach((id, i) => { const d = devices.get(id); if (d) d.order = i; });
     drag = null;
-    if (changed) fetch('/api/order', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
+    if (changed) hubFetch('/api/order', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids }) });
   };
   window.addEventListener('pointermove', move); window.addEventListener('pointerup', end); window.addEventListener('pointercancel', end);
 }
@@ -797,7 +803,7 @@ $('#offPop').addEventListener('click', async e => {
   if (btn?.dataset.a === 'menu') return openMenu(e, id, btn);
   if (btn?.dataset.a === 'wake') {
     btn.disabled = true; btn.textContent = 'Sending…';
-    const r = await fetch('/api/devices/' + encodeURIComponent(id) + '/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'wake' }) }).catch(() => null);
+    const r = await hubFetch('/api/devices/' + encodeURIComponent(id) + '/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'wake' }) }).catch(() => null);
     btn.textContent = r?.ok ? 'Sent ✓' : 'Failed';
     return;
   }
@@ -807,7 +813,7 @@ $('#offPop').addEventListener('click', async e => {
 
 // ---------- live data ----------
 function connect() {
-  const es = new EventSource('/api/stream');
+  const es = new HubEvents();
   es.onmessage = ev => {
     const m = JSON.parse(ev.data);
     if (m.type === 'snapshot') {
@@ -830,7 +836,6 @@ function connect() {
       latestVersions[m.platform] = m.version; renderGrid(); checkLegacyApp();
       if (appApi?.checkForUpdates) appApi.checkForUpdates().then(renderUpdateButton).catch(() => {});
     }
-    else if (m.type === 'paired') { if ($('#addDlg').open && osTab === 'app') showPairCode(); }
     else if (m.type === 'energySettings') { energy.saved = m.settings; renderPriceRow(); if (!$('#advView').hidden) loadAdv(); }
     else if (m.type === 'order') { for (const [id, o] of Object.entries(m.order)) { const d = devices.get(id); if (d) d.order = o; } renderGrid(); }
     else if (m.type === 'status') {
@@ -843,7 +848,7 @@ function connect() {
   };
   es.onerror = () => {
     $('#summaryText').textContent = 'Reconnecting to hub…'; $('#summaryText').classList.remove('full'); $('#summaryShort').textContent = '';
-    fetch('/api/info').then(r => r.json()).then(i => { if (i.locked) location.reload(); }).catch(() => {});
+    hubFetch('/api/info').then(r => r.json()).then(i => { if (i.locked && !nativeDashboard) { sessionStorage.removeItem('dm.session'); location.replace('/unlock'); } }).catch(() => {});
   };
 }
 
@@ -864,10 +869,10 @@ function openMenu(e, id, anchor = e.currentTarget) {
     if (a === 'history') location.hash = '#/history/' + encodeURIComponent(id);
     else if (a === 'rename') {
       const name = prompt('Device name', d.name);
-      if (name) await fetch('/api/devices/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+      if (name) await hubFetch('/api/devices/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
     } else if (a === 'remove') {
       if (confirm(`Remove "${d.name}"? If its agent is still running it will re-appear. To stop it, run the uninstall command on that device.`))
-        await fetch('/api/devices/' + encodeURIComponent(id), { method: 'DELETE' });
+        await hubFetch('/api/devices/' + encodeURIComponent(id), { method: 'DELETE' });
     }
   });
 }
@@ -875,54 +880,68 @@ document.addEventListener('click', () => document.querySelector('.menu')?.remove
 
 // ---------- add device dialog ----------
 let osTab = 'win';
-function hubOrigins() {
-  const local = ['localhost', '127.0.0.1', '::1', '[::1]'].includes(location.hostname);
-  // Tailscale HTTPS first: installs and links over it can't be tampered with on the LAN.
-  const ts = (info?.remote?.urls || []).filter(u => u.startsWith('https:')).map(u => ({ url: u, label: u.replace(/^https:\/\//, '') + ' (Tailscale, encrypted)' }));
-  const lan = (info?.addresses || []).map(a => ({ url: `http://${a.address}:${info.port}`, label: `${a.address} (${a.name})` }));
-  const here = { url: location.origin, label: location.host + ' (this address)' };
-  const all = local ? lan.concat(lan.length ? [] : [here]) : [here, ...lan.filter(l => l.url !== here.url)];
-  return ts.concat(all.filter(o => !ts.some(t => t.url === o.url)));
-}
-function updateCmd() {
-  const hub = $('#hubSel').value;
-  const t = info.token;
-  $('#cmd').textContent = osTab === 'win'
-    ? `irm -Headers @{Authorization='Bearer ${t}'} "${hub}/install.ps1" | iex`
-    : `curl -fsSL -H "Authorization: Bearer ${t}" "${hub}/install.sh" | bash`;
-  $('#cmdRow').style.display = osTab === 'app' ? 'none' : '';
-  $('#pairRow').hidden = osTab !== 'app';
-  $('#viewUrl').textContent = `${hub}/?key=${t}`;
-  if (osTab === 'app') {
-    $('#cmdHint').innerHTML = 'On the other computer, open <a href="' + esc(hub) + '/download" target="_blank" style="color:var(--accent)">' + esc(hub) + '/download</a> to install the <b>Device Monitor</b> app, then open it and choose <b>Connect to a hub</b>. It finds this hub automatically, or enter <b>' + esc(hub.replace('http://', '')) + '</b>, then type the pairing code below. That computer then shows up here and can view the dashboard too.';
-    showPairCode();
-    return;
+let invitationRequest = 0;
+async function updateCmd() {
+  const request = ++invitationRequest, dest = $('#hubSel').value, id = $('#enrollDevice').value || null;
+  $('#cmd').textContent = ''; $('#viewUrl').textContent = ''; $('#pairCode').textContent = '';
+  $('#cmdRow').style.display = osTab === 'app' ? 'none' : ''; $('#pairRow').hidden = osTab !== 'app';
+  $('#enableHttps').hidden = !!info?.origin || !info?.localOrigin;
+  $('#cmdHint').textContent = info?.origin ? 'Use this single-use invitation within ten minutes. Selecting an existing device replaces its previous credentials when redeemed.' : 'For remote devices, enable Tailscale HTTPS or configure a trusted HTTPS hub origin. The loopback browser link works only on this computer.';
+  if (!dest) return;
+  async function issue(kind) {
+    const res = await hubFetch('/api/invites', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({kind, origin:dest, id:kind === 'browser' ? null : id})});
+    const out = await res.json();
+    if (!res.ok || !/^[A-Za-z0-9_-]{43}$/.test(out.code || '')) throw new Error(out.error || 'Cannot create invitation');
+    return out.code;
   }
-  $('#cmdHint').textContent = osTab === 'win'
-    ? 'Lightweight background agent, nothing to install, no admin needed. Paste into PowerShell on the other PC (Win+X → Terminal). Uninstall later with: irm ' + hub + '/uninstall.ps1 | iex'
-    : 'Paste into Terminal on the Mac or Linux machine. No sudo needed; it runs in the background and starts at login. Uninstall later with: curl -fsSL ' + hub + '/uninstall.sh | bash';
-}
-// One-time code a desktop app types to join this hub (valid 10 minutes).
-let pairTimer = null;
-async function showPairCode() {
-  clearTimeout(pairTimer);
   try {
-    const r = await (await fetch('/api/pair/code', { method: 'POST' })).json();
-    $('#pairCode').textContent = r.code.slice(0, 3) + ' ' + r.code.slice(3);
-    $('#pairHint').textContent = 'one-time · valid 10 minutes';
-    pairTimer = setTimeout(() => { if ($('#addDlg').open && osTab === 'app') showPairCode(); }, r.expires - Date.now() - 5000);
-  } catch { $('#pairCode').textContent = '––– –––'; $('#pairHint').textContent = "Couldn't get a code from the hub."; }
+    if (!info?.canShare) { $('#cmdHint').textContent = 'Create new invitations in the hub app or its local operator dashboard.'; return; }
+    const view = await issue('browser');
+    if (request !== invitationRequest) return;
+    $('#viewUrl').textContent = dest + '/unlock#join=' + view;
+    if (!info?.canEnroll) { $('#cmdHint').textContent = 'Create device enrollments on the hub. The browser link below is ready to share.'; return; }
+    if (!info.origin || dest !== info.origin) return;
+    const code = await issue(osTab === 'app' ? 'desktop' : 'agent');
+    if (request !== invitationRequest) return;
+    if (osTab === 'app') {
+      $('#pairCode').textContent = dest + '/pair#join=' + code;
+      $('#pairHint').textContent = 'Paste into Connect on the other computer.';
+    } else if (osTab === 'win') {
+      $('#cmd').textContent = "irm -UseBasicParsing -MaximumRedirection 0 -Headers @{Authorization='Bearer " + code + "'} '" + dest + "/install.ps1' | iex";
+    } else {
+      $('#cmd').textContent = "curl -q --proto '=https' -fsS -H @- '" + dest + "/install.sh' <<'DM_HEADER' | bash\nAuthorization: Bearer " + code + "\nDM_HEADER";
+    }
+  } catch (e) { if (request === invitationRequest) $('#cmdHint').textContent = e.message; }
 }
-$('#addBtn').addEventListener('click', async () => {
-  info = await (await fetch('/api/info')).json();
-  const sel = $('#hubSel');
-  sel.innerHTML = hubOrigins().map(o => `<option value="${o.url}">${esc(o.label)}</option>`).join('');
-  updateCmd();
-  $('#addDlg').showModal();
-});
+function safeDestination(value, local) {
+  try {
+    const u = new URL(value);
+    if (u.origin !== value || !/^(?:[a-z0-9.-]+|\[[0-9a-f:]+\])$/i.test(u.hostname)) return false;
+    return u.protocol === 'https:' || (local && u.protocol === 'http:' && u.hostname === '127.0.0.1');
+  } catch { return false; }
+}
+async function enrollmentOptions() {
+  info = await (await hubFetch('/api/info')).json();
+  const sel = $('#hubSel'); sel.replaceChildren();
+  for (const dest of [info.origin, info.localOrigin]) if (dest && safeDestination(dest, dest === info.localOrigin)) sel.add(new Option(dest, dest));
+  const deviceSel = $('#enrollDevice'); deviceSel.replaceChildren(new Option('New device',''));
+  for (const d of devices.values()) deviceSel.add(new Option('Reconnect ' + (d.name || d.id), d.id));
+  await updateCmd();
+}
+$('#addBtn').addEventListener('click', async () => { $('#addDlg').showModal(); await enrollmentOptions(); });
 $('#hubSel').addEventListener('change', updateCmd);
+$('#enrollDevice').addEventListener('change', updateCmd);
+$('#enableHttps').addEventListener('click', async () => {
+  const b = $('#enableHttps'); b.disabled = true;
+  try {
+    const result = await (await hubFetch('/api/remote/https', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enable:true})})).json();
+    if (!result.ok) { $('#cmdHint').textContent = result.enableUrl || result.error || 'Could not enable HTTPS'; return; }
+    await enrollmentOptions();
+  } finally { b.disabled = false; }
+});
+$('#copyPair').addEventListener('click', e => copyFrom(e.currentTarget,'#pairCode'));
 $('#addDone').addEventListener('click', () => $('#addDlg').close());
-$('#addDlg').addEventListener('close', () => clearTimeout(pairTimer));
+$('#addDlg').addEventListener('close', () => { invitationRequest++; });
 $('#osTabs').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   osTab = b.dataset.os;
@@ -955,7 +974,7 @@ function setRange(id, r) {
 async function loadSeries(id) {
   const want = rangeOf(id);
   try {
-    const r = await (await fetch(`/api/history/${encodeURIComponent(id)}?range=${want}&points=360`)).json();
+    const r = await (await hubFetch(`/api/history/${encodeURIComponent(id)}?range=${want}&points=360`)).json();
     if (want !== rangeOf(id) || !r.points) return;
     series.set(id, { points: r.points, resolution: r.resolution });
     drawChart(id);
@@ -1053,7 +1072,7 @@ async function loadHistory() {
   const seq = ++hv.seq;
   const w = Math.min(1200, Math.max(200, Math.round(($('#hvCharts').clientWidth || 900))));
   try {
-    const r = await (await fetch(`/api/history/${encodeURIComponent(hv.id)}?from=${Math.round(hv.from)}&to=${Math.round(hv.to)}&points=${w}`)).json();
+    const r = await (await hubFetch(`/api/history/${encodeURIComponent(hv.id)}?from=${Math.round(hv.from)}&to=${Math.round(hv.to)}&points=${w}`)).json();
     if (seq !== hv.seq) return;
     hv.points = r.points || []; hv.resolution = r.resolution || 60e3;
   } catch { hv.points = []; }
@@ -1256,6 +1275,10 @@ async function openSettings() {
   $('#settingsDlg').showModal();
 }
 let settingsMode = null;
+const signOut = $('#signOut'), revokeSessions = $('#revokeSessions');
+if (signOut) { signOut.hidden = nativeDashboard; signOut.onclick = async () => { await hubFetch('/api/logout',{method:'POST'}); sessionStorage.removeItem('dm.session'); location.replace('/unlock'); }; }
+if (revokeSessions && nativeDashboard) appApi?.getSettings().then(s => { revokeSessions.hidden = s.mode !== 'host'; });
+if (revokeSessions) revokeSessions.onclick = async () => { if (confirm('Revoke all browser sessions and pending invitations?')) await hubFetch('/api/sessions/revoke',{method:'POST'}); };
 $('#settingsBtn').addEventListener('click', openSettings);
 $('#setDone').addEventListener('click', () => $('#settingsDlg').close());
 $('#setCopy').addEventListener('click', async e => {
@@ -1284,18 +1307,8 @@ $('#setStartup').addEventListener('change', async e => {
   $('#setStartMin').disabled = !e.target.checked;
 });
 $('#setStartMin').addEventListener('change', async e => { e.target.checked = await appApi.setStartMinimized(e.target.checked); });
-$('#setChange').addEventListener('click', () => {
-  const msg = settingsMode === 'host'
-    ? 'Stop hosting the dashboard on this computer?\n\nOther devices that report to it will show as offline until a hub is set up again. You can then choose Host or Connect.'
-    : 'Disconnect from this hub and choose again?\n\nYou can then pick a different hub or host the dashboard here.';
-  if (confirm(msg)) appApi.changeSetup();
-});
-$('#setQuit').addEventListener('click', () => {
-  const msg = settingsMode === 'host'
-    ? 'Quit Device Monitor?\n\nThis computer hosts the dashboard, so it will stop for all devices until the app is opened again.'
-    : 'Quit Device Monitor?\n\nThis computer will stop reporting until the app is opened again.';
-  if (confirm(msg)) appApi.quit();
-});
+$('#setChange').addEventListener('click', () => appApi.changeSetup());
+$('#setQuit').addEventListener('click', () => appApi.quit());
 
 // ---------- updates (Settings → Updates) ----------
 const latestVersions = {};   // platform -> newest published version (from the hub)
@@ -1308,7 +1321,7 @@ function versionLabel(d) {
 }
 async function loadLatestVersions() {
   for (const p of ['windows', 'mac']) {
-    try { const r = await fetch('/api/update/' + p); if (r.ok) latestVersions[p] = (await r.json()).version; } catch {}
+    try { const r = await hubFetch('/api/update/' + p); if (r.ok) latestVersions[p] = (await r.json()).version; } catch {}
   }
   renderGrid();
   checkLegacyApp();
@@ -1333,6 +1346,7 @@ function describeUpdate(u, s) {
     case 'ready': return [`Version ${u.version} is ready.`, 'Restart to update'];
     case 'ready-download': return [`Version ${u.version} downloaded and verified.`, 'Open installer'];
     case 'installing': return [`Installing version ${u.version}…`, null];
+    case 'source-release': return ['Version ' + u.version + ' is available for packaged apps.', null];
     case 'available': return [`Version ${u.version} is available.`, s.canAutoUpdate ? 'Install now' : 'Download…'];
     case 'error': return [`Couldn't update: ${u.message}`, 'Try again'];
     case 'unavailable': return ['Updates are turned off in this build.', null];
@@ -1529,7 +1543,7 @@ $('#setTouAdd').addEventListener('click', () => {
 });
 async function saveEnergySettings(s) {
   try {
-    const r = await fetch('/api/energy/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) });
+    const r = await hubFetch('/api/energy/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(s) });
     if (r.ok) energy.saved = await r.json();
   } catch {}
   renderPriceRow();
@@ -1548,7 +1562,7 @@ $('#setCurrency').addEventListener('change', e => {
   const s = priceSettings();
   saveEnergySettings({ region: 'custom', rate: s.rate, currency: e.target.value, tou: s.tou });
 });
-fetch('/api/energy/settings').then(r => r.json()).then(s => { energy.saved = s; renderPriceRow(); }).catch(() => renderPriceRow());
+hubFetch('/api/energy/settings').then(r => r.json()).then(s => { energy.saved = s; renderPriceRow(); }).catch(() => renderPriceRow());
 
 // ---------- advanced page: power, cost and usage totals ----------
 const adv = { range: store.get('advRange') || '7d', data: null, timer: null, seq: 0, hover: null, live: null };
@@ -1592,7 +1606,7 @@ function advBounds() {
 async function loadAdv() {
   const seq = ++adv.seq;
   try {
-    const r = await (await fetch('/api/energy?bounds=' + advBounds().join(','))).json();
+    const r = await (await hubFetch('/api/energy?bounds=' + advBounds().join(','))).json();
     if (seq !== adv.seq) return;
     adv.data = r; energy.saved = r.settings;
   } catch { if (seq !== adv.seq) return; }
@@ -1754,6 +1768,7 @@ renderGrid();
 connect();
 route();
 loadLatestVersions();
+}
 </script>
 </body>
 </html>

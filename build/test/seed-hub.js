@@ -1,10 +1,7 @@
 // Test fixture: hub on :7788 with 7 days of synthetic history + live fake reports.
 const fs = require('fs'), path = require('path'), os = require('os');
-const dir = path.join(os.tmpdir(), 'dm-hist-test');
-fs.rmSync(dir, { recursive: true, force: true });
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dm-hist-test-'));
 fs.mkdirSync(path.join(dir, 'history'), { recursive: true });
-const token = 'testtoken';
-fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ token }));
 const devs = [{ id: 'ws', name: 'Workstation' }, { id: 'dgx', name: 'DGX Test' }, { id: 'mbp', name: 'MacBook Pro' }, { id: 'nas', name: 'NAS' }, { id: 'lab', name: 'Lab PC' }];
 const now = Date.now(), MIN = 60e3;
 const wave = (t, p, a, b) => a + b * Math.sin(t / p);
@@ -18,8 +15,9 @@ for (const d of devs) {
   fs.writeFileSync(path.join(dir, 'history', d.id + '.ndjson'), lines.join('\n') + '\n');
 }
 const { startHub } = require('../../server');
-startHub({ port: 7788, dataDir: dir, rootDir: path.join(__dirname, '../..') }).then(() => {
-  console.log('test hub on :7788');
+startHub({ port: 7788, dataDir: dir, rootDir: path.join(__dirname, '../..'), fixture: true }).then(hub => {
+  console.log('Synthetic test hub on loopback :7788');
+  if (process.argv.includes('--invite') && process.stdout.isTTY) console.log(hub.browserLink());
   const want = {}, results = {};
   const fakeProcs = d => ['chrome', 'Code', 'python3', 'node', 'explorer', 'Discord', 'obs64', 'svchost', 'MsMpEng', 'steam'].map((name, i) => ({
     pid: 1000 + i * 37, name, cpu: Math.max(0, 30 / (i + 1) + Math.random() * 3), mem: (12 - i) * 3e8, gpuMem: name === 'python3' ? 20e9 : null, gpu: name === 'python3' ? 88 : null,
@@ -29,19 +27,17 @@ startHub({ port: 7788, dataDir: dir, rootDir: path.join(__dirname, '../..') }).t
       if (d.id === 'nas' && d.sent) continue;   // reports once, then goes offline (Wake-on-LAN test)
       d.sent = true;
       const t = Date.now(), cpu = Math.max(0, wave(t, 3e4, 40, 30));
-      fetch('http://127.0.0.1:7788/api/report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
-        id: d.id, token, hostname: d.name, platform: 'linux', os: 'Test OS', uptime: 3600,
+      const reply = hub.seedReport({
+        id: d.id, hostname: d.name, platform: 'linux', os: 'Test OS', uptime: 3600,
         formFactor: d.id === 'mbp' ? 'laptop' : 'desktop', power: d.id === 'dgx' ? { cpu: 85 } : null,
         cpu: { name: 'Test CPU', usage: cpu, cores: [cpu, cpu / 2], temp: 45 + cpu * 0.4 },
         memory: { total: 64e9, used: 36e9 }, gpus: [{ name: 'Test GPU', usage: 90, temp: 80, power: d.id === 'mbp' ? null : 500, memUsed: 10e9, memTotal: d.id === 'mbp' ? 0 : 48e9 }],
         disks: [{ name: '/', total: 1e12, used: d.id === 'lab' ? 9.5e11 : 4e11 }], net: { rx: 1e5, tx: 5e4 }, diskIO: { read: 1e6, write: 2e6 },
         ai: d.id === 'dgx' ? [{ app: 'ComfyUI', mem: 110255669248, models: [{ name: 'minimax_h3_fl2va_pruned_int8_convrot.safetensors', size: 20970379616, kind: 'unet' }, { name: 'qwen3vl_32b_minimax_h3_bf16.safetensors', size: 51506295256, kind: 'clip' }, { name: 'minimax_h3_video_vae_int8_convrot.safetensors', size: 2811065184, kind: 'vae' }] }, { app: 'Ollama', mem: 5.2e9, models: [{ name: 'qwen3:8b', size: 6.1e9 }] }] : d.id === 'ws' ? [] : undefined,
         features: ['procs', 'actions'], actions: d.id === 'mbp' ? [] : ['sleep', 'restart', 'shutdown'], macs: ['aa:bb:cc:dd:ee:0' + devs.indexOf(d)],
-        processes: want[d.id] ? fakeProcs(d) : undefined, actionResult: results[d.id] }) })
-        .then(r => r.json()).then(r => {
-          want[d.id] = !!r.procs; results[d.id] = undefined;
-          for (const c of r.commands || []) results[d.id] = { id: c.id, ok: c.action !== 'shutdown', message: c.action === 'shutdown' ? 'Test device refused (fake)' : 'Fake ' + c.action + ' done' };
-        }).catch(() => {});
+        processes: want[d.id] ? fakeProcs(d) : undefined, actionResult: results[d.id] });
+      want[d.id] = !!reply.procs; results[d.id] = undefined;
+      for (const c of reply.commands || []) results[d.id] = { id: c.id, ok: c.action !== 'shutdown', message: c.action === 'shutdown' ? 'Test device refused (fake)' : 'Fake ' + c.action + ' done' };
     }
   };
   tick(); setInterval(tick, 2000);

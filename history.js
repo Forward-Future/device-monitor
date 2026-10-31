@@ -3,6 +3,8 @@
 //  - 1-minute averages for the last 30 days, in memory + appended to data/history/<id>.ndjson
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const { isValidId } = require('./security');
 
 const FIELDS = ['cpu', 'gpu', 'mem', 'cpuTemp', 'gpuTemp', 'gpuPower', 'power', 'rx', 'tx', 'dr', 'dw'];
 const MAX_FIELDS = ['cpu', 'gpu', 'cpuTemp', 'gpuTemp', 'power'];   // also keep the peak within each bucket
@@ -11,7 +13,42 @@ const MINUTE_MS = 60 * 1000;
 const KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 
 const maxKey = f => f + 'Max';
-const safe = id => String(id).replace(/[^a-zA-Z0-9_-]/g, '_');
+const legacyName = id => id.replace(/[^a-zA-Z0-9_-]/g, '_');
+function privateDir(dir) {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (!fs.lstatSync(dir).isDirectory()) throw new Error('Unsafe history directory');
+  if (process.platform !== 'win32') fs.chmodSync(dir, 0o700);
+}
+function privateFile(file) {
+  if (!fs.lstatSync(file).isFile()) throw new Error('Unsafe history file');
+  if (process.platform !== 'win32') fs.chmodSync(file, 0o600);
+}
+function replacePrivate(file, contents) {
+  const tmp = file + '.' + crypto.randomUUID() + '.tmp';
+  try {
+    fs.writeFileSync(tmp, contents, { mode: 0o600, flag: 'wx' });
+    fs.renameSync(tmp, file);
+  } finally { fs.rmSync(tmp, { force: true }); }
+}
+function rows(file, cutoff, stats = {}) {
+  privateFile(file);
+  const result = [];
+  for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+    if (!line) continue;
+    let row; try { row = JSON.parse(line); } catch { stats.pruned = true; continue; }
+    if (row && Number.isFinite(row.t) && row.t >= cutoff) result.push(row);
+    else stats.pruned = true;
+  }
+  return result;
+}
+function byMinute(points) {
+  const minutes = new Map();
+  for (const { id, ...p } of points) {
+    const old = minutes.get(p.t);
+    minutes.set(p.t, old ? merge(old, p) : p);
+  }
+  return [...minutes.values()].sort((a, b) => a.t - b.t);
+}
 
 // Average `points` into buckets `width` ms wide. Peaks are kept as <field>Max.
 function aggregate(points, width, start) {
@@ -59,48 +96,74 @@ function merge(a, b) {
 }
 
 class HistoryStore {
-  constructor(dataDir) {
-    this.dir = path.join(dataDir, 'history');
-    fs.mkdirSync(this.dir, { recursive: true });
-    this.raw = new Map();      // id -> samples (last hour)
-    this.minutes = new Map();  // id -> 1-minute points (last 30 days)
-    this.pending = new Map();  // id -> samples in the current, unfinished minute
-    this.load();
-  }
-
-  file(id) { return path.join(this.dir, safe(id) + '.ndjson'); }
-
-  load() {
+  constructor(dataDir, registered = []) {
+    const legacy = path.join(dataDir, 'history');
+    privateDir(legacy);
+    this.dir = path.join(legacy, 'by-id');
+    privateDir(this.dir);
+    this.raw = new Map();
+    this.minutes = new Map();
+    this.pending = new Map();
     const cutoff = Date.now() - KEEP_MS;
     for (const name of fs.readdirSync(this.dir)) {
-      if (!name.endsWith('.ndjson')) continue;
-      const file = path.join(this.dir, name);
-      const lines = fs.readFileSync(file, 'utf8').split('\n');
-      const pts = [];
-      let merged = false;
-      for (const line of lines) {
-        if (!line) continue;
-        let p; try { p = JSON.parse(line); } catch { continue; }
-        if (!(p.t >= cutoff)) continue;
-        const last = pts[pts.length - 1];
-        if (last && last.t === p.t) { pts[pts.length - 1] = { id: p.id ?? last.id, ...merge(last, p) }; merged = true; }
-        else pts.push(p);
-      }
-      if (!pts.length) { fs.unlinkSync(file); continue; }
-      const id = pts[pts.length - 1].id || name.slice(0, -7);
-      for (const p of pts) delete p.id;
-      this.minutes.set(id, pts);
-      if (merged || pts.length < lines.length - 1) this.rewrite(id);   // drop expired lines and duplicate minutes
+      if (!/^(?:[0-9a-f]{2}){1,64}\.ndjson$/.test(name)) continue;
+      const id = Buffer.from(name.slice(0, -7), 'hex').toString('utf8');
+      if (!isValidId(id) || path.basename(this.file(id)) !== name) continue;
+      const file = this.file(id), stats = {}, points = rows(file, cutoff, stats);
+      const minutes = byMinute(points);
+      if (!minutes.length) { fs.unlinkSync(file); continue; }
+      this.minutes.set(id, minutes);
+      if (stats.pruned || minutes.length !== points.length) this.rewrite(id);
     }
+    // Each legacy row records its original ID. Publish all destinations before
+    // removing the source; a restart prefers already-published minutes.
+    for (const name of fs.readdirSync(legacy)) {
+      if (!name.endsWith('.ndjson')) continue;
+      const file = path.join(legacy, name), points = rows(file, cutoff);
+      const base = name.slice(0, -7);
+      const stat = fs.lstatSync(file, {bigint:true});
+      const ids = new Set(registered.filter(id => {
+        const old = legacyName(id);
+        if (old === base) return true;
+        if (old.toLowerCase() !== base.toLowerCase()) return false;
+        // Case folding is a property of the filesystem, not of the OS.
+        const alias = fs.lstatSync(path.join(legacy, old + '.ndjson'), {bigint:true, throwIfNoEntry:false});
+        return alias && alias.dev === stat.dev && alias.ino === stat.ino;
+      }));
+      for (const p of points) if (isValidId(p.id)) ids.add(p.id);
+      const fallback = ids.size === 1 ? [...ids][0] : !ids.size && isValidId(base) ? base : null;
+      const grouped = new Map(), unassigned = [];
+      for (const p of points) {
+        const id = p.id == null ? fallback : p.id;
+        if (!isValidId(id)) { unassigned.push(p); continue; }
+        if (!grouped.has(id)) grouped.set(id, []);
+        grouped.get(id).push(p);
+      }
+      for (const [id, group] of grouped) {
+        const combined = new Map(byMinute(group).map(p => [p.t, p]));
+        for (const p of this.minutes.get(id) || []) combined.set(p.t, p);
+        this.minutes.set(id, [...combined.values()].sort((a,b) => a.t - b.t));
+        this.rewrite(id);
+      }
+      if (unassigned.length) replacePrivate(file + '.unassigned', unassigned.map(p => JSON.stringify(p)).join('\n') + '\n');
+      fs.unlinkSync(file);
+    }
+  }
+
+  file(id) {
+    if (!isValidId(id)) throw new Error('Invalid history ID');
+    return path.join(this.dir, Buffer.from(id).toString('hex') + '.ndjson');
   }
 
   rewrite(id) {
     const pts = this.minutes.get(id) || [];
-    fs.writeFileSync(this.file(id), pts.map(p => JSON.stringify({ id, ...p })).join('\n') + (pts.length ? '\n' : ''));
+    replacePrivate(this.file(id), pts.map(p => JSON.stringify({ id, ...p })).join('\n') + (pts.length ? '\n' : ''));
   }
 
   add(id, sample) {
     const raw = this.raw.get(id) || (this.raw.set(id, []), this.raw.get(id));
+    const last = raw[raw.length - 1];
+    if (last && sample.t - last.t < 1000) return;
     raw.push(sample);
     while (raw.length && raw[0].t < sample.t - RAW_MS) raw.shift();
 
@@ -127,7 +190,7 @@ class HistoryStore {
       while (mins.length && mins[0].t < cutoff) mins.shift();
       this.rewrite(id);
     } else {
-      fs.appendFileSync(this.file(id), JSON.stringify({ id, ...p }) + '\n');
+      fs.appendFileSync(this.file(id), JSON.stringify({ id, ...p }) + '\n', { mode: 0o600 });
     }
   }
 
@@ -169,7 +232,7 @@ class HistoryStore {
 
   remove(id) {
     this.raw.delete(id); this.minutes.delete(id); this.pending.delete(id);
-    fs.rm(this.file(id), { force: true }, () => {});
+    fs.rmSync(this.file(id), { force: true });
   }
 
   close() { for (const [id, pend] of this.pending) this.commit(id, pend); this.pending.clear(); }

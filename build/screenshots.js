@@ -4,14 +4,11 @@
 //   node build/screenshots.js
 const fs = require('fs'), path = require('path'), os = require('os'), { spawn } = require('child_process');
 
-const PORT = 7799, CDP_PORT = 9339, W = 1440, H = 900;
+const PORT = 7799, W = 1440, H = 900;
 const out = path.join(__dirname, '..', 'docs', 'screenshots');
-const dir = path.join(os.tmpdir(), 'dm-screenshots');
-fs.rmSync(dir, { recursive: true, force: true });
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dm-screenshots-'));
 fs.mkdirSync(path.join(dir, 'history'), { recursive: true });
 fs.mkdirSync(out, { recursive: true });
-const token = 'demotoken';
-fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({ token }));
 const GB = 1e9, TB = 1e12;
 
 const devs = [
@@ -60,7 +57,7 @@ devs.forEach((d, i) => {
 
 function report(d, i) {
   const t = Date.now(), s = sample(d, t, i);
-  return { id: d.id, token, hostname: d.name, platform: d.platform, os: d.os, uptime: d.uptime + (t - now) / 1000, formFactor: d.formFactor,
+  return { id: d.id, hostname: d.name, platform: d.platform, os: d.os, uptime: d.uptime + (t - now) / 1000, formFactor: d.formFactor,
     appVersion: require('../package.json').version, power: d.cpuPower ? { cpu: d.cpuPower } : null,
     cpu: { name: d.cpu.name, usage: s.cpu, threads: d.cpu.threads, clockMHz: d.cpu.clock, temp: s.cpuTemp,
       cores: Array.from({ length: d.cpu.threads }, () => Math.max(0, Math.min(100, s.cpu + (Math.random() - 0.5) * 30))) },
@@ -91,17 +88,23 @@ const browsers = [
 
 (async () => {
   const { startHub } = require('../server');
-  await startHub({ port: PORT, dataDir: dir, rootDir: path.join(__dirname, '..') });
-  const tick = () => devs.forEach((d, i) => fetch(`http://127.0.0.1:${PORT}/api/report`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(report(d, i)) }).catch(() => {}));
+  const hub = await startHub({ port: PORT, dataDir: dir, rootDir: path.join(__dirname, '..'), fixture:true });
+  const tick = () => devs.forEach((d,i) => hub.seedReport(report(d,i)));
   tick(); const timer = setInterval(tick, 2000);
   await sleep(3000);
 
   const exe = browsers.find(b => fs.existsSync(b));
   if (!exe) throw new Error('No Chrome or Edge found');
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'dm-shot-profile-'));
-  const browser = spawn(exe, ['--headless=new', `--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=${profile}`, '--hide-scrollbars', '--no-first-run', 'about:blank'], { stdio: 'ignore' });
+  const browser = spawn(exe, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--hide-scrollbars', '--no-first-run', 'about:blank'], { stdio: 'ignore' });
   let target;
-  for (let i = 0; i < 50 && !target; i++) { await sleep(200); target = await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`).then(r => r.json()).then(l => l.find(t => t.type === 'page')).catch(() => null); }
+  for (let i = 0; i < 50 && !target; i++) {
+    await sleep(200);
+    try {
+      const port = Number(fs.readFileSync(path.join(profile,'DevToolsActivePort'),'utf8').split('\n')[0]);
+      target = await fetch('http://127.0.0.1:' + port + '/json/list').then(r => r.json()).then(l => l.find(t => t.type === 'page'));
+    } catch {}
+  }
   const page = await cdp(target.webSocketDebuggerUrl);
   await page.send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 2, mobile: false });
   await page.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: 'dark' }] });
@@ -123,6 +126,8 @@ const browsers = [
     console.log('saved', name);
   };
 
+  await page.send('Page.navigate', { url: hub.browserLink() });
+  await sleep(1000);
   await go('');
   await evaluate(`localStorage.setItem('range', '1h'); localStorage.setItem('hvRange', '24h')`);
   await go('', 5000);
@@ -138,6 +143,6 @@ const browsers = [
   await go('#/advanced', 4000);
   await shot('advanced');
 
-  page.close(); browser.kill(); clearInterval(timer);
+  page.close(); browser.kill(); clearInterval(timer); hub.close();
   process.exit(0);
 })().catch(e => { console.error(e); process.exit(1); });

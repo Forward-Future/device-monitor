@@ -6,12 +6,12 @@ A desktop app (Windows and macOS) in the style of NZXT CAM that shows CPU, GPU, 
 
 ## Install
 
-Run **`dist\Device Monitor Setup <version>.exe`** on Windows (or download it from your hub at `http://<hub>:7777/download`), or **`Device Monitor.dmg`** on a Mac (see [Mac](#mac)). It installs for your user only (no admin), adds Start menu and desktop shortcuts, and opens the app.
+Run **`dist\Device Monitor Setup <version>.exe`** on Windows (or download it from your hub’s trusted HTTPS `/download` page), or **`Device Monitor.dmg`** on a Mac (see [Mac](#mac)). It installs for your user only (no admin), adds Start menu and desktop shortcuts, and opens the app.
 
 On first launch, pick a role:
 
-- **Host the dashboard here** on your main PC. It runs the hub, monitors itself, and serves the dashboard to other devices. Windows asks once for admin approval so other devices can connect.
-- **Connect to a hub** on every other PC. Hubs on your network are found automatically, or you can type the address. That PC is then registered and can view the dashboard too.
+- **Host the dashboard here** on your main PC. It runs the hub, monitors itself, and serves the dashboard to other devices. Direct HTTPS hosting on Windows can request permission for its configured TLS port.
+- **Connect to a hub** on every other PC. On the host, open **+ → Desktop app** and copy its ten-minute invitation. Paste the entire invitation into Connect. That PC can then report and view the dashboard.
 
 The app starts when you sign in and opens its window (Windows can take up to a minute after sign-in to start it). Closing the window keeps it monitoring in the system tray. The **⚙ Settings** button (top-right of the app window) lets you:
 
@@ -67,7 +67,7 @@ Progress for each device is in **Settings → Updates**, and each card shows its
 - **The release key.** The first `npm run release` creates a signing key at `~/.device-monitor/release-key.pem`. It is not in the repo. **Back it up.** Apps only accept updates signed with it. The public half is `build/update-key.pub.pem` and is built into the app.
 - **Apps older than 1.2.0** have no updater. Their dashboard shows a notice with a download button, so they need one manual install.
 - **Macs** can't install updates silently without an Apple Developer ID. The app downloads the new `.dmg` from the hub, checks its signature and SHA-256, and then offers to open it (notification, tray menu and Settings → Updates).
-- **Agents installed with the one-line command** (e.g. on Linux servers) aren't the app, so they don't update this way. Re-run the one-liner to refresh them.
+- **Standalone agent installations** (e.g. on Linux servers) aren't the app, so they don't update this way. Choose **Reconnect** and run a fresh installer command to refresh them.
 
 ## Mac
 
@@ -86,12 +86,12 @@ The app isn't notarized, so the first time you open it, **right-click → Open**
 
 ## Adding devices
 
-- **Another Windows PC**: install the app and choose **Connect**. If you don't want the full app there, use the one-line command from the dashboard's **+ Add device** dialog. It installs a small background agent with no admin rights needed.
+- **Another Windows PC**: install the app and choose **Connect**. If you don't want the full app there, use the installer command from the dashboard's **+ Add device** dialog. It installs a small background agent with no admin rights needed.
 - **Mac / Linux without the app**: run the `curl … | bash` command from **+ Add device**. It installs a background agent (a LaunchAgent on macOS, a systemd user service on Linux) with no sudo needed.
 
 ## Viewing from a phone, tablet or browser
 
-Open the hub's address, e.g. `http://192.168.1.20:7777`, on anything on the same network. *Copy dashboard link* in the tray menu gives you the address. For access away from home, use [Tailscale](https://tailscale.com).
+Use **Copy dashboard link** in the tray or the **+** dialog. The one-time link signs in one browser tab for eight hours. Use the same trusted HTTPS address on your LAN or tailnet. A loopback link works only on the hub computer.
 
 ## Temperatures
 
@@ -106,19 +106,21 @@ Windows doesn't expose CPU temperature to normal apps, which is why LibreHardwar
 
 ## Security
 
-Device Monitor is designed for a home network, with remote access over Tailscale.
+The hub serves local clients at `http://127.0.0.1:7777`. Remote browsers and agents require HTTPS. Configure one of these on the hub:
 
-- **Access key.** The dashboard and its API need the hub's key everywhere, including on the hub PC itself (the app signs itself in with a cookie), so another local process can't drive the hub through loopback. Browsers get it once from the dashboard link (Settings → Dashboard link → Copy, or the Add device dialog) and keep it in an HttpOnly, SameSite=Strict cookie. Desktop apps join with a one-time 6-digit pairing code (valid 10 minutes, 5 tries) or the dashboard link. Agents use the same key to report.
-- **Apps check the hub first.** Before sending its key, an app makes the hub prove it knows it (an HMAC of a random challenge), so searching Tailscale peers or an old address can't leak the key.
-- **Local addresses only.** The hub refuses connections from outside the local network and Tailscale (public IPv4/IPv6), even if a port is forwarded to it.
-- **No cross-site requests.** Changes (POST/PUT/PATCH/DELETE) with another site's Origin are refused, including requests to `127.0.0.1` from web pages.
-- **Websites can't reach it.** The hub only answers requests addressed to it by IP address, localhost or this computer's own name. That blocks DNS-rebinding attacks from websites you visit. To use a custom DNS name, add it to `"allowedHosts"` in the hub's `config.json`.
-- **Strict pages.** Pages are served with a strict Content-Security-Policy, and every metric an agent reports is validated and re-typed by the hub.
-- **App updates** are signed (see above), so tampering on the network can't push code to your devices.
-- **One-line installs** send the key as an `Authorization` header rather than in the URL, and check the SHA-256 of the agent script they download against the value the hub pinned when it issued the command. The hub's open endpoints (install commands, downloads, pairing, hub info) are rate-limited per address.
-- **Keys on disk** are stored in files only your user account can read (`chmod 600` on macOS and Linux; per-user folders on Windows).
-- **Plain HTTP on the LAN.** Installs and downloads travel unencrypted unless you use the hub's Tailscale HTTPS address, so only run them on a network you trust.
-- **Firewall.** "Network access" in Settings opens TCP 7777 (dashboard/API) and UDP 7778 (discovery) to the local subnet only, on any network profile (many home networks are marked Public). It also removes the broad any-port rules Windows creates from its own "allow this app" prompt. Tailscale doesn't need any firewall rule.
+- In the host dashboard, open **+ → Enable Tailscale HTTPS on this hub**. Follow Tailscale’s setup if prompted. The hub advertises the Serve address when it becomes available.
+- To serve TLS directly on a private LAN, set `DM_HTTPS_ORIGIN` to the trusted HTTPS origin (for example `https://monitor.home.example:8443`) and `DM_TLS_CERT` and `DM_TLS_KEY` to the PEM certificate chain and private-key paths. The HTTPS listener uses the port in that origin. Install your CA on clients if necessary. The local HTTP and direct HTTPS listeners require different ports.
+- For an existing local HTTPS reverse proxy, set `DM_HTTPS_ORIGIN`, leave the two TLS file variables unset and proxy to loopback. Preserve the public Host and overwrite X-Forwarded-Proto with https and X-Forwarded-For with the single actual private client IP. Restrict proxy ingress to your LAN or tailnet.
+
+**Upgrading an existing fleet.** Upgrade the hub and desktop apps using trusted installers. Old shared keys, cookies, six-digit codes and old report formats are retired. From the hub’s **+** dialog, select **Reconnect** for each existing device before issuing its new invitation or agent command. Redemption rotates that device’s credentials and preserves its registry entry and history. Re-run the new installer command on standalone agents. Stop older agents until they are re-enrolled, since old binaries can still send their previous telemetry to their saved address. Browser users need a fresh dashboard invitation. Only the hub app or the headless hub’s local operator can enroll or reconnect devices. A paired desktop can share a temporary browser invitation. Ordinary browser sessions cannot issue credentials.
+
+**Access.** Standalone agents receive a reporting credential bound to one device ID. Desktop Connect receives a separate dashboard credential. Its bundled dashboard keeps native settings local, and its authenticated network requests require the TLS public key enrolled from the trusted invitation origin. A change of TLS public key requires a fresh desktop invitation. The browser keeps a short-lived token in origin-specific tab storage. Use **Sign out of this tab**, **Revoke browser access** on the host, or remove/re-enroll a device to revoke its access.
+
+**Installation and updates.** Generated install and uninstall commands require HTTPS. Each installer checks the agent digest before replacing its program. Desktop updates verify the signed release manifest and downloaded bytes, including manual Windows updates. The Windows helper holds the verified file against writes while launching it.
+
+**Local storage.** The hub keeps its local administration key and hashed device credentials in `access-v2.json` under its own data directory. POSIX history files are owner-only. Legacy histories migrate by their recorded device IDs. Ambiguous legacy rows without an ID are preserved in private `.unassigned` files for manual recovery.
+
+**Headless access.** Run `npm run hub`, then run `node server.js --invite` in a second interactive terminal on the hub to print a single-use, ten-minute local operator invitation. Issuing a new headless invitation replaces the previous pending one. Ordinary startup output contains no credential.
 
 ## Development
 
@@ -135,7 +137,7 @@ npm run hub        # headless hub only (e.g. on a home server), dashboard at :77
 | `main.js` | Electron app: window, tray, setup, host/connect modes, firewall, start with Windows |
 | `preload.js`, `app/` | Setup screen and offline screen |
 | `server.js` | Hub: API, live stream (SSE), installer scripts, dashboard |
-| `discovery.js` | LAN auto-discovery (UDP 7778) |
+| `discovery.js` | Wake-on-LAN packets and legacy discovery helpers |
 | `security.js` | Input validation, Host checks (anti DNS-rebinding), CSP headers |
 | `updater.js`, `build/release.js` | Signed self-updates from the hub; the release command |
 | `history.js` | Metric history (raw last hour + 1-minute averages for 30 days, on disk) |
@@ -146,7 +148,7 @@ npm run hub        # headless hub only (e.g. on a home server), dashboard at :77
 | `public/index.html` | Dashboard UI |
 | `build/make-icon.js` | Generates the app and tray icons |
 
-App data is stored in `%APPDATA%\Device Monitor`: `settings.json`, plus `hub\` with the device list and agent token. The installer isn't code-signed, so Windows SmartScreen may show "Windows protected your PC". Click **More info → Run anyway**.
+App data is stored in `%APPDATA%\Device Monitor`: `settings.json`, plus `hub\` with the device list and access records. The installer isn't code-signed, so Windows SmartScreen may show "Windows protected your PC". Click **More info → Run anyway**.
 
 ## License
 

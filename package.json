@@ -1,7 +1,7 @@
 {
   "name": "device-monitor",
   "productName": "Device Monitor",
-  "version": "1.2.29",
+  "version": "1.2.30",
   "description": "Monitor CPU, GPU, memory and temperatures across all your devices",
   "main": "main.js",
   "author": "Matt",
@@ -9,6 +9,7 @@
   "scripts": {
     "start": "electron .",
     "hub": "node server.js",
+    "test": "node --test build/test/security.test.js",
     "icon": "node build/make-icon.js",
     "dist": "node build/make-icon.js && electron-builder --win nsis",
     "dist:mac": "node build/make-icon.js && electron-builder --mac dmg zip --universal",
@@ -21,6 +22,8 @@
       "main.js",
       "preload.js",
       "server.js",
+      "access.js",
+      "transport.js",
       "agent-runner.js",
       "discovery.js",
       "history.js",

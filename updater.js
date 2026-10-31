@@ -9,6 +9,9 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
+const { Transform } = require('stream');
+const { pipeline } = require('stream/promises');
+const { readBytes } = require('./transport');
 
 const PLATFORM = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'mac' : null;
 const MAX_SIZE = 600 * 1024 * 1024;
@@ -20,10 +23,10 @@ function signedPayload(m) {
 function verifyManifest(m, publicKeyPem) {
   if (!m || typeof m !== 'object') return 'invalid manifest';
   if (m.platform !== PLATFORM) return 'wrong platform';
-  if (!/^\d+\.\d+\.\d+$/.test(m.version || '')) return 'bad version';
-  if (typeof m.file !== 'string' || m.file !== path.basename(m.file) || !/\.(exe|dmg|zip)$/i.test(m.file)) return 'bad file name';
+  if (typeof m.version !== 'string' || !/^\d{1,6}\.\d{1,6}\.\d{1,8}$/.test(m.version)) return 'bad version';
+  if (typeof m.file !== 'string' || m.file !== path.basename(m.file) || !(PLATFORM === 'windows' ? /\.exe$/i : /\.(dmg|zip)$/i).test(m.file)) return 'bad file name';
   if (!Number.isInteger(m.size) || m.size <= 0 || m.size > MAX_SIZE) return 'bad size';
-  if (!/^[0-9a-f]{64}$/.test(m.sha256 || '')) return 'bad hash';
+  if (typeof m.sha256 !== 'string' || !/^[0-9a-f]{64}$/.test(m.sha256)) return 'bad hash';
   try {
     const ok = crypto.verify(null, Buffer.from(signedPayload(m)), crypto.createPublicKey(publicKeyPem), Buffer.from(String(m.signature), 'base64'));
     return ok ? null : 'bad signature';
@@ -37,107 +40,107 @@ function newer(a, b) {   // is version a newer than b?
 }
 
 class Updater {
-  constructor({ app, hubUrl, publicKeyPem, dir, canInstall, manualDownload, isBusy, isVisible, onStatus, log = console.log }) {
-    Object.assign(this, { app, hubUrl, publicKeyPem, dir, canInstall, manualDownload, isBusy, isVisible, onStatus, log });
+  constructor({ app, hubUrl, publicKeyPem, dir, canInstall, manualDownload, isBusy, isVisible, onStatus, request = fetch, log = console.log }) {
+    Object.assign(this, { app, hubUrl, publicKeyPem, dir, canInstall, manualDownload, isBusy, isVisible, onStatus, request, log });
     this.status = { state: publicKeyPem && PLATFORM ? 'idle' : 'unavailable', version: null, message: null, lastCheck: null };
     this.timer = null; this.checking = null; this.waitStarted = null;
-    fs.mkdirSync(dir, { recursive: true });
-    for (const f of fs.readdirSync(dir)) fs.rm(path.join(dir, f), { force: true }, () => {});   // leftovers from a past update
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    for (const f of fs.readdirSync(dir)) {
+      if (!/^dm-[a-f0-9-]+\.(part|exe|dmg|zip)$/.test(f)) continue;
+      try { fs.rmSync(path.join(dir, f), { force:true }); }
+      catch (e) { this.log('Staged update still in use; cleanup deferred:', e.code); }
+    }
   }
 
   set(patch) { this.status = { ...this.status, ...patch }; this.onStatus?.(this.status); }
 
   start(intervalMs = 15 * 60e3) {
     if (this.status.state === 'unavailable') return;
-    setTimeout(() => this.check(), 20e3);
+    this.firstCheck = setTimeout(() => this.check(), 20e3);
     this.timer = setInterval(() => this.check(), intervalMs);
   }
-  stop() { clearInterval(this.timer); }
+  stop() { clearInterval(this.timer); clearTimeout(this.firstCheck); clearTimeout(this.retry); }
 
   check() {
-    if (this.status.state === 'unavailable' || !this.hubUrl()) return Promise.resolve(this.status);
-    if (!this.checking) this.checking = this._check().finally(() => { this.checking = null; });
+    if (this.installing || this.status.state === 'unavailable' || !this.hubUrl()) return Promise.resolve(this.status);
+    if (!this.checking) {
+      this.checking = this._check().finally(() => { this.checking = null; this.maybeInstall(); });
+    }
     return this.checking;
   }
 
   async _check() {
     const base = this.hubUrl();
-    const current = this.app.getVersion();
-    const ready = (this.status.state === 'ready' || this.status.state === 'ready-download') ? { ...this.status } : null;
+    const previous = this.readyFile ? { ...this.status } : null;
     try {
-      if (this.status.state !== 'ready' && this.status.state !== 'ready-download') this.set({ state: 'checking', message: null });
-      const res = await fetch(`${base}/api/update/${PLATFORM}`, { signal: AbortSignal.timeout(8000) });
+      if (!previous) this.set({ state: 'checking', message: null });
+      const res = await this.request(base + '/api/update/' + PLATFORM, { redirect: 'error', signal: AbortSignal.timeout(8000) });
       if (res.status === 404) {
-        // A hub that briefly has no manifest (restarting, empty downloads dir) must not throw
-        // away an update that was already downloaded and verified.
-        this.set(ready ? { ...ready, lastCheck: Date.now() } : { state: 'idle', version: null, lastCheck: Date.now() });
+        await res.body?.cancel();
+        if (!previous) this.set({ state: 'idle', version: null });
         return this.status;
       }
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const m = await res.json();
+      if (!res.ok) { await res.body?.cancel(); throw new Error('HTTP ' + res.status); }
+      const m = JSON.parse((await readBytes(res.body, 32 * 1024)).toString('utf8'));
       const problem = verifyManifest(m, this.publicKeyPem);
-      if (problem) throw new Error(`update rejected: ${problem}`);
-      if (!newer(m.version, current)) { this.set({ state: 'idle', version: null, lastCheck: Date.now() }); return this.status; }
-
-      if (!this.canInstall()) {   // e.g. macOS without a Developer ID signature, or a dev build
-        // Packaged apps still fetch + verify the installer themselves, so the file the user
-        // ends up opening was checked against the signed manifest — not whatever the LAN served.
-        if (this.manualDownload?.()) {
-          const file = path.join(this.dir, m.file);
-          if (this.status.state !== 'ready-download' || this.status.version !== m.version) {
-            this.set({ state: 'downloading', version: m.version });
-            await this.download(`${base}/download/${encodeURIComponent(m.file)}`, file, m);
-            this.readyFile = file;
-            this.set({ state: 'ready-download', version: m.version, lastCheck: Date.now(), file });
-          }
-        } else {
-          this.set({ state: 'available', version: m.version, lastCheck: Date.now(), downloadUrl: `${base}/download` });
-        }
+      if (problem) throw new Error('update rejected: ' + problem);
+      if (!newer(m.version, this.app.getVersion())) {
+        if (!previous) this.set({ state: 'idle', version: null });
         return this.status;
       }
-      const file = path.join(this.dir, m.file);
-      if (this.status.state !== 'ready' || this.status.version !== m.version) {
-        this.set({ state: 'downloading', version: m.version });
-        await this.download(`${base}/download/${encodeURIComponent(m.file)}`, file, m);
-        this.set({ state: 'ready', version: m.version, lastCheck: Date.now() });
-        this.readyFile = file; this.waitStarted = Date.now();
+      if (!this.manualDownload?.() && !this.canInstall()) {
+        this.set({ state: 'source-release', version: m.version, lastCheck: Date.now() });
+        return this.status;
       }
-      this.maybeInstall();
+      if (!this.readyFile || signedPayload(m) !== signedPayload(this.readyManifest)) {
+        this.set({ state: 'downloading', version: m.version });
+        const file = await this.download(base + '/download/' + encodeURIComponent(m.file), m);
+        const old = this.readyFile;
+        this.readyFile = file; this.readyManifest = m; this.waitStarted = Date.now();
+        if (old) await fs.promises.unlink(old).catch(() => {});
+      }
+      this.set({ state: PLATFORM === 'windows' ? 'ready' : 'ready-download', version: m.version, lastCheck: Date.now() });
     } catch (e) {
       this.log('update check failed:', e.message);
-      // A failed re-check (e.g. the hub is restarting) doesn't throw away an update that's already verified.
-      if (ready) this.set({ ...ready, lastCheck: Date.now() });
+      if (previous) this.set({ ...previous, lastCheck: Date.now() });
       else this.set({ state: 'error', message: e.message, lastCheck: Date.now() });
     }
     return this.status;
   }
 
-  async download(url, file, m) {
-    const res = await fetch(url, { signal: AbortSignal.timeout(10 * 60e3) });
-    if (!res.ok) throw new Error('download failed: HTTP ' + res.status);
+  async download(url, m) {
+    const res = await this.request(url, { redirect: 'error', signal: AbortSignal.timeout(10 * 60e3) });
+    if (!res.ok) { await res.body?.cancel(); throw new Error('download failed: HTTP ' + res.status); }
+    const base = path.join(this.dir, 'dm-' + crypto.randomUUID());
+    const tmp = base + '.part', file = base + path.extname(m.file).toLowerCase();
     const hash = crypto.createHash('sha256');
-    const out = fs.createWriteStream(file);
     let size = 0;
+    const verify = new Transform({ transform(chunk, enc, done) {
+      size += chunk.length;
+      if (size > m.size) return done(new Error('download larger than expected'));
+      hash.update(chunk); done(null, chunk);
+    } });
     try {
-      for await (const chunk of res.body) {
-        size += chunk.length;
-        if (size > m.size) throw new Error('download larger than expected');
-        hash.update(chunk);
-        if (!out.write(chunk)) await new Promise(r => out.once('drain', r));
-      }
-      await new Promise(r => out.end(r));
-      if (size !== m.size) throw new Error('download size mismatch');
-      if (hash.digest('hex') !== m.sha256) throw new Error('download hash mismatch');
-    } catch (e) {   // a file that failed verification is never left lying around
-      out.destroy();
-      fs.rmSync(file, { force: true });
-      throw e;
-    }
+      await pipeline(res.body, verify, fs.createWriteStream(tmp, { flags: 'wx', mode: 0o600 }));
+      if (size !== m.size || hash.digest('hex') !== m.sha256) throw new Error('installer integrity check failed');
+      await fs.promises.rename(tmp, file);
+      return file;
+    } finally { await fs.promises.rm(tmp, { force: true }); }
+  }
+
+  async openManual(open) {
+    if (this.status.state !== 'ready-download' || !this.readyFile || !this.readyManifest) return false;
+    const file = this.readyFile, expected = this.readyManifest.sha256;
+    const hash = crypto.createHash('sha256');
+    for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+    if (hash.digest('hex') !== expected || file !== this.readyFile) throw new Error('installer integrity check failed');
+    await open(file);
+    return true;
   }
 
   // Don't restart the app while someone is looking at it — but don't wait forever either.
   maybeInstall(force = false) {
-    if (this.status.state !== 'ready' || !this.readyFile) return false;
+    if (this.installing || this.checking || this.status.state !== 'ready' || !this.readyFile || (!force && !this.canInstall())) return false;
     const waited = Date.now() - (this.waitStarted || Date.now());
     if (!force && this.isBusy() && waited < 60 * 60e3) {
       clearTimeout(this.retry); this.retry = setTimeout(() => this.maybeInstall(), 5 * 60e3);
@@ -150,6 +153,8 @@ class Updater {
   // Windows: a detached helper waits for this app to exit, runs the installer silently, then
   // relaunches the app (in the background if it was running in the background).
   install() {
+    this.installing = true;
+    clearTimeout(this.retry);
     this.set({ state: 'installing' });
     const q = s => `'${String(s).replace(/'/g, "''")}'`;
     const relaunchArgs = this.isVisible() ? '' : " -ArgumentList '--hidden'";
@@ -159,7 +164,15 @@ class Updater {
       `function L($m) { "$(Get-Date -Format s) $m" | Out-File -Append -Encoding utf8 -FilePath $log }`,
       `L 'update ${this.status.version}: waiting for the app to exit'`,
       `Wait-Process -Id ${process.pid} -Timeout 60 -ErrorAction SilentlyContinue`,
-      `try { $p = Start-Process -FilePath ${q(this.readyFile)} -ArgumentList '/S','--updated' -Wait -PassThru -ErrorAction Stop; L "installer exit code $($p.ExitCode)" } catch { L "installer failed: $_" }`,
+      `$file = ${q(this.readyFile)}`,
+      `try {`,
+      `  $handle = [IO.File]::Open($file, 'Open', 'Read', 'Read')`,
+      `  $sha = [Security.Cryptography.SHA256]::Create()`,
+      `  $actual = [BitConverter]::ToString($sha.ComputeHash($handle)).Replace('-','')`,
+      `  if ($actual -ine ${q(this.readyManifest.sha256)}) { throw 'Installer digest mismatch' }`,
+      `  $p = Start-Process -FilePath $file -ArgumentList '/S','--updated' -Wait -PassThru -ErrorAction Stop`,
+      `  L "installer exit code $($p.ExitCode)"`,
+      `} catch { L "installer failed: $_" } finally { if ($handle) { $handle.Dispose() }; if ($sha) { $sha.Dispose() } }`,
       `Start-Process -FilePath ${q(process.execPath)}${relaunchArgs}`,
       `L 'relaunched'`,
     ].join('\n');
@@ -171,6 +184,7 @@ class Updater {
       `(Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '${commandLine}' }).ReturnValue`],
       { windowsHide: true }, (err, stdout) => {
         if (err || String(stdout).trim() !== '0') {
+          this.installing = false;
           this.log('could not start the update helper:', err ? err.message : String(stdout).trim());
           this.set({ state: 'error', message: 'could not start the installer' });
           return;

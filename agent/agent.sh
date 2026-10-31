@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Device Monitor agent for Linux. Usage: agent.sh <hub-url> <token>  (or config in ~/.local/share/device-monitor/config)
+# Device Monitor Linux collector. A standalone enrollment supplies config beside this script.
 DIR="$(cd "$(dirname "$0")" && pwd)"
-[ -f "$DIR/config" ] && . "$DIR/config"
-HUB="${1:-$HUB}"; TOKEN="${2:-$TOKEN}"; INTERVAL="${INTERVAL:-2}"
-[ -z "$HUB" ] || [ -z "$TOKEN" ] && { echo "usage: $0 <hub> <token>"; exit 1; }
+[ "$DM_REPORT_PIPE" != 1 ] && [ -f "$DIR/config" ] && . "$DIR/config"
+INTERVAL="${INTERVAL:-2}"
+if [ "$DM_REPORT_PIPE" != 1 ]; then
+  [[ "$HUB" == https://* && -n "$DEVICE_ID" && "$TOKEN" =~ ^[A-Za-z0-9_-]{43}$ ]] || { echo 'Re-enroll with an HTTPS agent invitation' >&2; exit 1; }
+fi
 HUB="${HUB%/}"
 
 ID="$(cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null || hostname)"
@@ -170,7 +172,11 @@ while true; do
     GPUS="$GPUS${GPUS:+,}{\"name\":\"AMD GPU\",\"vendor\":\"amd\",\"usage\":$U,\"temp\":$GT,\"memUsed\":$MU,\"memTotal\":$MT,\"power\":$GP}"
   done
 
-  BODY="{\"id\":\"$(esc "$ID")\",\"token\":\"$TOKEN\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"linux\",\"appVersion\":\"$(esc "${DM_APP_VERSION:-}")\",\"os\":\"$(esc "$OS")\",\"formFactor\":\"$FORM\",\"power\":{\"cpu\":$(num "$CPU_W")},\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$THREADS,\"clockMHz\":$MHZ,\"temp\":$(cpu_temp),$CPU_JSON},\"memory\":{$MEM},\"gpus\":[$GPUS],\"disks\":[$DISKS],$RATES,\"ai\":${AI:-null}}"
-  curl -fsS -m 5 -X POST -H 'Content-Type: application/json' --data-binary "$BODY" "$HUB/api/report" >/dev/null 2>&1
+  BODY="{\"id\":\"$(esc "${DEVICE_ID:-$ID}")\",\"hostname\":\"$(esc "$HOST")\",\"platform\":\"linux\",\"appVersion\":\"$(esc "${DM_APP_VERSION:-}")\",\"os\":\"$(esc "$OS")\",\"formFactor\":\"$FORM\",\"power\":{\"cpu\":$(num "$CPU_W")},\"uptime\":$UPTIME,\"cpu\":{\"name\":\"$(esc "$CPU_NAME")\",\"threads\":$THREADS,\"clockMHz\":$MHZ,\"temp\":$(cpu_temp),$CPU_JSON},\"memory\":{$MEM},\"gpus\":[$GPUS],\"disks\":[$DISKS],$RATES,\"ai\":${AI:-null}}"
+  if [ "$DM_REPORT_PIPE" = 1 ]; then
+    printf '%s\n' "$BODY"
+  else
+    printf '%s' "$BODY" | curl -q --proto '=https' -fsS -m 5 -H @/dev/fd/3 -H 'Content-Type: application/json' --data-binary @- "$HUB/api/report" 3<<<"Authorization: Bearer $TOKEN" >/dev/null 2>&1
+  fi
   sleep "$INTERVAL"
 done

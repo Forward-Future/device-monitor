@@ -25,18 +25,10 @@
 <body>
 <main>
   <h1>This dashboard is locked</h1>
-  <!--ERROR-->
-  <p>To open it on this device, use its dashboard link:</p>
-  <ol>
-    <li>On the hub PC, open Device Monitor → <b>Settings</b>.</li>
-    <li>Next to <b>Dashboard link</b>, click <b>Copy</b> and open that link here.</li>
-  </ol>
-  <p>Or paste the link or access key:</p>
-  <form method="get" action="/" autocomplete="off">
-    <input name="key" aria-label="Dashboard link or access key" placeholder="Link or access key" spellcheck="false" required>
-    <button type="submit">Open</button>
-  </form>
+  <p id="error" class="err"></p><p>Open a fresh dashboard invitation from the hub, or paste it here. Each link signs in one browser tab.</p>
+  <form autocomplete="off"><input id="invite" aria-label="Dashboard invitation" placeholder="Paste dashboard invitation" spellcheck="false" required><button type="submit">Open</button></form>
   <p class="muted">Installing the app on this computer? <a href="/download">Download it here</a>.</p>
 </main>
+<script src="/login.js"></script>
 </body>
 </html>

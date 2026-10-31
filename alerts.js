@@ -7,6 +7,8 @@ const path = require('path');
 const crypto = require('crypto');
 const dns = require('dns');
 const net = require('net');
+const http = require('node:http');
+const https = require('node:https');
 const { readJson, writeJson } = require('./safe-json');
 
 // threshold: [min, max]; hyst: how far a value must fall back below the threshold to count as resolved.
@@ -38,6 +40,10 @@ const isObj = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 // legitimate setup.
 function isBlockedAddress(ip) {
   let a = String(ip).toLowerCase().replace(/^\[|\]$/g, '');
+  if (net.isIPv6(a)) {
+    try { a = new URL('http://[' + a + ']').hostname.slice(1, -1); } catch { return true; }
+  }
+  if (a === 'fd00:ec2::254') return true;
   if (a.startsWith('::ffff:')) {
     a = a.slice(7);          // IPv4-mapped IPv6, dotted (127.0.0.1) or hex groups (7f00:1)
     if (!net.isIPv4(a) && a.includes(':')) {
@@ -55,7 +61,7 @@ const BLOCKED_HOST = h => isBlockedAddress(h);
 const httpUrl = s => {
   try {
     const u = new URL(String(s));
-    if (!/^https?:$/.test(u.protocol)) return null;
+    if (!/^https?:$/.test(u.protocol) || u.username || u.password) return null;
     const h = u.hostname.toLowerCase();
     if (BLOCKED_HOST(h) || h === 'localhost' || h.endsWith('.localhost')) return null;
     return u.href.replace(/\/$/, '');
@@ -90,7 +96,7 @@ function validSettings(b, prev) {
   const email = clean(ntfy.email, 120);
   if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return null;
   const server = ntfy.server ? httpUrl(ntfy.server) : 'https://ntfy.sh';
-  const hookUrl = hook.url ? httpUrl(hook.url) : '';
+  const hookUrl = hook.url ? httpUrl(hook.url) : hook.keepUrl && prev ? prev.channels.webhook.url : '';
   if (!server || hookUrl === null) return null;
   return {
     rules,
@@ -107,8 +113,8 @@ function validSettings(b, prev) {
 class Alerts {
   // devices(): [{ id, name, online, lastSeen }]; latest(id): the device's last report;
   // costToday(id | '*'): { cost, currency } or null; hubUrl(): link to put in notifications.
-  constructor({ dataDir, broadcast, devices, latest, costToday, hubUrl, log = console.log }) {
-    Object.assign(this, { broadcast, devices, latest, costToday, hubUrl, log });
+  constructor({ dataDir, broadcast, devices, latest, costToday, hubUrl, external = true, log = console.log }) {
+    Object.assign(this, { broadcast, devices, latest, costToday, hubUrl, external, log });
     this.file = path.join(dataDir, 'alerts.json');
     this.logFile = path.join(dataDir, 'alerts-log.json');
     const saved = readJson(this.file, null);
@@ -127,10 +133,13 @@ class Alerts {
     this.costTimer = setInterval(() => this.checkCost(), 5 * 60e3);
   }
 
-  settings() { return this.cfg; }
+  settings() {
+    const ch = this.cfg.channels;
+    return { ...this.cfg, channels: { ...ch, webhook: { enabled: ch.webhook.enabled, url: '', keepUrl: !!ch.webhook.url } } };
+  }
 
   update(input) {
-    const s = validSettings(input);
+    const s = validSettings(input, this.cfg);
     if (!s) return null;
     const keep = new Map(s.rules.map(r => [r.id, JSON.stringify({ ...r, enabled: true })]));
     const old = new Map(this.cfg.rules.map(r => [r.id, JSON.stringify({ ...r, enabled: true })]));
@@ -141,9 +150,9 @@ class Alerts {
       if (!rule || !rule.enabled || keep.get(rid) !== old.get(rid)) this.state.delete(key);
     }
     this.save();
-    this.broadcast({ type: 'alerts', settings: s, active: this.active() });
+    this.broadcast({ type: 'alerts', settings: this.settings(), active: this.active() });
     this.tick();
-    return s;
+    return this.settings();
   }
 
   save() {
@@ -282,6 +291,7 @@ class Alerts {
   }
 
   async deliver(ev) {
+    if (!this.external) return {};
     const { ntfy, webhook } = this.cfg.channels, out = {};
     const link = this.hubUrl() + '/#/alerts';
     if (ntfy.enabled) {
@@ -308,19 +318,42 @@ class Alerts {
   close() { clearInterval(this.timer); clearInterval(this.costTimer); clearTimeout(this.logTimer); }
 }
 
+// This is the socket's lookup callback. The transport gets only approved
+// addresses and still uses the original hostname for HTTP Host and TLS.
+function publicLookup(host, options, callback) {
+  dns.lookup(host, { all: true, verbatim: true }, (error, answers) => {
+    if (error) return callback(error);
+    if (!answers.length || answers.some(a => isBlockedAddress(a.address))) return callback(new Error('Blocked alert destination'));
+    const allowed = options.family ? answers.filter(a => a.family === options.family) : answers;
+    if (!allowed.length) return callback(new Error('No allowed address'));
+    if (options.all) return callback(null, allowed);
+    callback(null, allowed[0].address, allowed[0].family);
+  });
+}
+
+let activePosts = 0;
 async function post(url, body) {
+  if (activePosts >= 8) return { ok: false, error: 'Alert deliveries busy' };
+  activePosts++;
   try {
-    // Check where the name actually resolves — a DNS name pointing at loopback/metadata is just
-    // as much an SSRF as a literal address. Redirects are refused rather than followed, for the
-    // same reason.
-    const { hostname } = new URL(url);
-    if (!net.isIP(hostname.replace(/^\[|\]$/g, ''))) {
-      const addrs = await dns.promises.lookup(hostname, { all: true }).catch(() => []);
-      if (addrs.length && addrs.every(a => isBlockedAddress(a.address))) return { ok: false, error: 'blocked: resolves to a local address' };
-    } else if (isBlockedAddress(hostname)) return { ok: false, error: 'blocked: local address' };
-    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(10e3), redirect: 'manual' });
-    return res.ok ? { ok: true } : { ok: false, error: `HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 200)}`.trim() };
-  } catch (e) { return { ok: false, error: e.cause?.code || e.message }; }
+    const u = new URL(url);
+    if (!httpUrl(u.href)) throw new Error('Blocked alert destination');
+    const data = Buffer.from(JSON.stringify(body));
+    return await new Promise((resolve, reject) => {
+      const req = (u.protocol === 'https:' ? https : http).request(u, {
+        method: 'POST', agent: false, lookup: publicLookup, signal: AbortSignal.timeout(10000),
+        headers: { 'Content-Type': 'application/json', 'Content-Length': data.length }
+      }, res => {
+        // Diagnostics need only the status. Never buffer or decompress third-party bodies.
+        const status = res.statusCode;
+        res.destroy();
+        resolve(status >= 200 && status < 300 ? { ok: true } : { ok: false, error: 'HTTP ' + status });
+      });
+      req.on('error', reject);
+      req.end(data);
+    });
+  } catch (e) { return { ok: false, error: e.code || e.message }; }
+  finally { activePosts--; }
 }
 
 // Current value of a metric in a report, plus details for the message.
@@ -343,4 +376,4 @@ function metric(type, b) {
   return [null];
 }
 
-module.exports = { Alerts, TYPES, validSettings, metric };
+module.exports = { Alerts, TYPES, validSettings, metric, publicLookup, post };

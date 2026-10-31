@@ -92,8 +92,10 @@ const HOSTNAME_RE = /^[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a
 function hostAllowed(hostHeader, extra = []) {
   if (!hostHeader) return false;
   let host = String(hostHeader).trim().toLowerCase();
-  if (host.startsWith('[')) host = host.slice(1, host.indexOf(']'));   // [IPv6]:port
-  else host = host.replace(/:\d+$/, '');
+  const match = /^(?:\[([0-9a-f:.]+)\]|([a-z0-9._-]+))(?::(\d{1,5}))?$/.exec(host);
+  if (!match || (match[3] && (+match[3] > 65535 || +match[3] < 1))) return false;
+  if (match[1]) return net.isIPv6(match[1]);
+  host = match[2];
   if (net.isIP(host)) return true;
   if (host.length > 253 || !HOSTNAME_RE.test(host)) return false;
   const me = os.hostname().toLowerCase();

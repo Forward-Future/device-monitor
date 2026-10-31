@@ -26,12 +26,18 @@ function run(args, timeout = 8000) {
     (e, out, err) => resolve({ ok: !e, out: String(out || ''), err: String(err || (e && e.message) || '') })));
 }
 
-let cache = null;
-async function status(port, { fresh = false } = {}) {
-  if (!fresh && cache && Date.now() - cache.at < 30e3) return cache.value;
-  const value = await readStatus(port);
-  cache = { at: Date.now(), value };
-  return value;
+const statusCache = new Map();
+function status(port, { fresh = false } = {}) {
+  const now = Date.now(), prior = statusCache.get(port);
+  if (prior?.pending) return prior.pending;
+  // Even explicit refreshes share a cooldown and at most one subprocess chain.
+  if (prior && now - prior.at < (fresh ? 5000 : 30000)) return Promise.resolve(prior.value);
+  const entry = prior || {};
+  entry.pending = readStatus(port).then(value => {
+    entry.value = value; entry.at = Date.now(); return value;
+  }).finally(() => { entry.pending = null; });
+  statusCache.set(port, entry);
+  return entry.pending;
 }
 
 async function readStatus(port) {
@@ -60,9 +66,23 @@ async function readStatus(port) {
 
 // HTTPS on the tailnet: https://<machine>.<tailnet>.ts.net -> http://127.0.0.1:<port>.
 // The first time, Tailscale may need HTTPS turned on for the tailnet; it prints a link for that.
-async function setHttps(port, on) {
+const mutations = new Map();
+function setHttps(port, on) {
+  const previous = mutations.get(port);
+  if (previous && (previous.pending || Date.now() - previous.finished < 5000)) {
+    if (previous.on === on) return previous.pending || Promise.resolve(previous.result);
+    return Promise.resolve({ ok:false, error:'A Tailscale configuration change is already in progress or cooling down.' });
+  }
+  const entry = { on };
+  entry.pending = configureHttps(port, on).then(result => { entry.result = result; return result; })
+    .finally(() => { entry.pending = null; entry.finished = Date.now(); });
+  mutations.set(port, entry);
+  return entry.pending;
+}
+async function configureHttps(port, on) {
   const r = on ? await run(['serve', '--bg', `http://127.0.0.1:${port}`], 20e3) : await run(['serve', '--https=443', 'off'], 15e3);
-  cache = null;
+  await statusCache.get(port)?.pending;
+  statusCache.delete(port);
   const text = (r.out + '\n' + r.err).trim();
   const link = text.match(/https:\/\/login\.tailscale\.com\/\S+/);
   const st = await status(port, { fresh: true });

@@ -36,7 +36,7 @@
     Device Monitor
   </div>
   <h1>Install Device Monitor</h1>
-  <p class="lead">Install the app on this computer, open it and choose <b>Connect to a hub</b>. It finds this hub automatically, then this computer shows up on the dashboard and can view it too.</p>
+  <p class="lead">Install the app on this computer, open it and choose <b>Connect to a hub</b>. Paste the HTTPS desktop invitation supplied by the hub operator. This computer can then report to and view the dashboard.</p>
   <div id="list"><p class="muted">Loading…</p></div>
   <h2>Just want to look?</h2>
   <p class="muted">The dashboard also works in any browser: <a id="dash" href="/" style="color: var(--accent)"></a></p>
@@ -47,18 +47,14 @@ document.getElementById('dash').textContent = location.origin;
 const fmtSize = b => b > 1e9 ? (b / 1e9).toFixed(1) + ' GB' : Math.round(b / 1e6) + ' MB';
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const steps = {
-  windows: '<ol><li>Run the installer. If Windows SmartScreen appears, click <b>More info → Run anyway</b> (the app isn\'t code-signed).</li><li>Choose <b>Connect to a hub</b>, pick this hub and enter the pairing code shown on the hub (<b>+</b> → Desktop app).</li></ol>',
-  mac: '<ol><li>Open the .dmg and drag Device Monitor to Applications.</li><li>The first time, <b>right-click the app → Open</b> (it isn\'t notarized by Apple).</li><li>Choose <b>Connect to a hub</b>, pick this hub and enter the pairing code shown on the hub (<b>+</b> → Desktop app).</li></ol>',
+  windows: '<ol><li>Run the installer. If Windows SmartScreen appears, click <b>More info → Run anyway</b> (the app isn\'t code-signed).</li><li>Choose <b>Connect to a hub</b>, paste the one-time desktop invitation shown on the hub (<b>+</b> → Desktop app).</li></ol>',
+  mac: '<ol><li>Open the .dmg and drag Device Monitor to Applications.</li><li>The first time, <b>right-click the app → Open</b> (it isn\'t notarized by Apple).</li><li>Choose <b>Connect to a hub</b>, paste the one-time desktop invitation shown on the hub (<b>+</b> → Desktop app).</li></ol>',
 };
 (async () => {
-  const [files, info] = await Promise.all([fetch('/api/downloads').then(r => r.json()), fetch('/api/info').then(r => r.json())]);
+  const files = await fetch('/api/downloads').then(r => r.json());
   const card = (f, primary) => `<div class="card ${primary ? 'primary' : ''}"><div class="row"><div class="info"><div class="name">${f.platform === 'windows' ? 'Windows' : 'macOS'} app</div><div class="meta">${esc(f.name)} · ${fmtSize(f.size)}</div></div><a class="btn ${primary ? 'primary' : ''}" href="/download/${encodeURIComponent(f.name)}" download>Download</a></div>${f.sha256 ? `<div class="meta" style="word-break:break-all;margin-top:8px">SHA-256: ${esc(f.sha256)}</div>` : ''}${primary ? steps[f.platform] : ''}</div>`;
   const forOs = files.filter(f => f.platform === os), others = files.filter(f => f.platform !== os);
   let html = forOs.map((f, i) => card(f, i === 0)).join('');
-  if (os === 'mac' && !forOs.length && info.token) {   // only shown to a browser that has the dashboard key
-    const cmd = `curl -fsSL -H "Authorization: Bearer ${info.token}" "${location.origin}/install.sh" | bash`;
-    html += `<div class="card primary"><div class="name">macOS</div><p class="muted" style="margin:6px 0 0">The Mac app hasn't been built yet. In the meantime, add this Mac to the dashboard by pasting this into <b>Terminal</b>. It runs a small background agent (no sudo):</p><code class="cmd">${esc(cmd)}</code><p class="muted">Then view the dashboard in your browser at the address below.</p></div>`;
-  }
   html += others.map(f => card(f, false)).join('');
   document.getElementById('list').innerHTML = html || '<p class="muted">No installers have been added to this hub yet.</p>';
 })();

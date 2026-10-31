@@ -1,6 +1,10 @@
 // Device Monitor hub: receives metrics from agents and serves the dashboard.
 // Embedded by the desktop app (main.js); can also run headless with `node server.js`.
 const http = require('http');
+const https = require('https');
+const { pipeline } = require('node:stream/promises');
+const transport = require('./transport');
+const { Access, bearer, localOperatorLink } = require('./access');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -24,6 +28,8 @@ const COMMAND_TTL = 60e3;     // power actions not picked up by the device withi
 const PROCS_WATCH_MS = 20e3;  // devices send their process list while a dashboard keeps asking
 // Static files for the installable phone app (PWA).
 const STATIC = {
+  '/session.js': ['session.js', 'text/javascript; charset=utf-8'],
+  '/login.js': ['login.js', 'text/javascript; charset=utf-8'],
   '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'],
   '/sw.js': ['sw.js', 'text/javascript; charset=utf-8'],
   '/icon-192.png': ['icon-192.png', 'image/png'],
@@ -43,19 +49,26 @@ function lanAddresses() {
   return out;
 }
 
-// Lets an app check that a hub knows its key before sending the key (see main.js hubAnswers).
-const hubProof = (token, nonce) => crypto.createHmac('sha256', String(token)).update('device-monitor-hub:' + nonce).digest('hex');
-
 // Starts the hub. Resolves with { port, token, close } once listening.
-function startHub({ port = 7777, dataDir, rootDir = __dirname, assetDir = rootDir } = {}) {
-const PORT = port;
+function startHub({ port = 7777, dataDir, rootDir = __dirname, assetDir = rootDir, fixture = false, headlessInvites = false, publicUrl = fixture ? null : process.env.DM_HTTPS_ORIGIN, tlsOptions } = {}) {
+let PORT = port;
+const configuredOrigin = transport.origin(publicUrl);
+if (publicUrl && !configuredOrigin) throw new Error('DM_HTTPS_ORIGIN must be a bare HTTPS origin');
+const certPath = !fixture && process.env.DM_TLS_CERT, keyPath = !fixture && process.env.DM_TLS_KEY;
+if (certPath || keyPath) {
+  if (!certPath || !keyPath || !configuredOrigin) throw new Error('Set DM_HTTPS_ORIGIN, DM_TLS_CERT and DM_TLS_KEY together');
+  tlsOptions = { cert: fs.readFileSync(certPath), key: fs.readFileSync(keyPath) };
+}
+if (tlsOptions && !configuredOrigin) throw new Error('TLS listener requires an HTTPS origin');
+if (tlsOptions && (Number(new URL(configuredOrigin).port) || 443) === PORT) throw new Error('Choose different ports for HTTPS and the local HTTP listener');
 const ROOT = assetDir;
 const DATA_DIR = dataDir || path.join(rootDir, 'data');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const DEVICES_FILE = path.join(DATA_DIR, 'devices.json');
 // App installers offered at /download (drop "Device Monitor Setup x.y.z.exe" / ".dmg" files here).
 const DOWNLOADS_DIR = path.join(DATA_DIR, 'downloads');
-fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
+fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+fs.mkdirSync(DOWNLOADS_DIR, { recursive: true, mode: 0o700 });
 
 let dlCache = { at: 0, list: [] };
 function listDownloads() {
@@ -97,17 +110,14 @@ try { downloadsWatch = fs.watch(DOWNLOADS_DIR, () => { clearTimeout(watchTimer);
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const config = readJson(CONFIG_FILE, {});
-if (!config.token) {
-  config.token = crypto.randomBytes(12).toString('hex');
-  writeJson(CONFIG_FILE, config);
-}
+const access = new Access(config, CONFIG_FILE);
 
 // id -> { id, name, hostname, platform, firstSeen, lastSeen }
 const registry = Object.create(null);   // null prototype: ids like __proto__ can't reach Object.prototype
 for (const [id, d] of Object.entries(readJson(DEVICES_FILE, {}))) if (sec.isValidId(id)) registry[id] = d;
 // id -> { latest } (memory only); metric history lives in the HistoryStore
 const live = Object.create(null);
-const history = new HistoryStore(DATA_DIR);
+const history = new HistoryStore(DATA_DIR, Object.keys(registry));
 const commands = new Map();   // id -> [{ id, action, t }] waiting for the device's next report
 const procWatch = new Map();  // id -> time until which the device should send its processes
 
@@ -129,30 +139,83 @@ function deviceView(id) {
 }
 
 // ---- Server-sent events --------------------------------------------------
-const clients = new Set();
+const clients = new Map();
+const STREAM_BUDGET = 256 * 1024;
 function broadcast(msg) {
-  const data = `data: ${JSON.stringify(msg)}\n\n`;
-  for (const res of clients) res.write(data);
+  const data = 'data: ' + JSON.stringify(msg) + '\n\n';
+  for (const [res, client] of clients) {
+    if (!client.permitted()) { res.destroy(); continue; }
+    if (client.queue) {
+      if (client.bytes > STREAM_BUDGET) { res.destroy(); continue; }
+      client.bytes += Buffer.byteLength(data);
+      client.queue.push(data);
+    } else if (res.writableLength > STREAM_BUDGET) {
+      res.destroy();
+    } else { res.write(data); }
+  }
+}
+async function snapshotChunk(res, data) {
+  if (res.destroyed) throw new Error('Stream closed');
+  if (res.write(data)) return;
+  await new Promise((resolve, reject) => {
+    const done = () => { res.off('drain', drain); res.off('close', close); };
+    const drain = () => { done(); resolve(); };
+    const close = () => { done(); reject(new Error('Stream closed')); };
+    res.once('drain', drain); res.once('close', close);
+  });
+}
+async function streamDashboard(req, res) {
+  if (clients.size >= MAX_STREAMS) return send(res, 503, { error: 'too many connections' });
+  const client = { permitted: () => isDashboard(principal(req)), queue: [], bytes: 0 };
+  clients.set(res, client); res.once('close', () => clients.delete(res));
+  res.setTimeout(15000, () => res.destroy());
+  res.writeHead(200, { ...sec.BASE_HEADERS, 'Content-Type':'text/event-stream', 'Cache-Control':'no-store', Connection:'keep-alive' });
+  // Preserve the existing snapshot event without materializing a whole fleet per socket.
+  await snapshotChunk(res, 'data: {"type":"snapshot","devices":[');
+  let separator = '';
+  for (const id of Object.keys(registry)) {
+    if (!registry[id]) continue;
+    if (!client.permitted()) { res.destroy(); return; }
+    await snapshotChunk(res, separator + JSON.stringify(deviceView(id)));
+    separator = ',';
+  }
+  await snapshotChunk(res, ']}\n\n');
+  while (client.queue.length) {
+    const chunk = client.queue.shift(); client.bytes -= Buffer.byteLength(chunk);
+    await snapshotChunk(res, chunk);
+  }
+  client.queue = null;
 }
 const statusTimer = setInterval(() => {
   // Heartbeat + lets clients notice devices that went offline.
-  broadcast({ type: 'status', online: Object.fromEntries(Object.keys(registry).map(id => [id, deviceView(id).online])) });
+  broadcast({ type: 'status', online: Object.fromEntries(Object.keys(registry).map(id => [id, Date.now() - (registry[id].lastSeen || 0) < OFFLINE_MS])) });
 }, 3000);
 
 // ---- Helpers --------------------------------------------------------------
 function send(res, status, body, type = 'application/json') {
-  res.writeHead(status, { ...sec.BASE_HEADERS, 'Content-Type': type, 'Cache-Control': 'no-store' });
+  res.writeHead(status, { ...sec.BASE_HEADERS, 'Content-Type': type, 'Cache-Control': 'no-store', ...(status >= 400 ? { Connection: 'close' } : {}) });
   res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
 }
 
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let size = 0; const chunks = [];
-    req.on('data', c => { size += c.length; if (size > 1e6) { reject(new Error('too large')); req.destroy(); } else chunks.push(c); });
-    req.on('end', () => {
-      try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch (e) { reject(e); }
-    });
-  });
+let activeBodies = 0;
+const bodyPeers = new Map();
+async function readBody(req) {
+  const peer = peerAddress(req), count = bodyPeers.get(peer) || 0;
+  if (count >= 4 || activeBodies >= 32) throw Object.assign(new Error('Too many active requests'), { status: 429 });
+  if (Number(req.headers['content-length']) > 1e6) throw Object.assign(new Error('Body too large'), { status: 413 });
+  const initial = principal(req);
+  activeBodies++; bodyPeers.set(peer, count + 1);
+  const timer = setTimeout(() => req.destroy(), 10000);
+  try {
+    const bytes = await transport.readBytes(req, 1e6);
+    const current = principal(req);
+    if (initial && (!current || current.role !== initial.role || current.id !== initial.id)) throw Object.assign(new Error('Credential revoked'), {status:401});
+    return bytes.length ? JSON.parse(bytes.toString('utf8')) : {};
+  } finally {
+    clearTimeout(timer); activeBodies--;
+    const left = bodyPeers.get(peer) - 1;
+    if (left) bodyPeers.set(peer, left); else bodyPeers.delete(peer);
+  }
 }
 
 function sendHtml(res, file, status = 200, vars = {}) {
@@ -192,7 +255,7 @@ function rateOk(req) {
   let ip = net.isIP(fwd) ? fwd : addr;
   const now = Date.now();
   let r = rates.get(ip);
-  if (!r && rates.size >= RATE_MAX_KEYS) { ip = addr; r = rates.get(ip); }   // table full: share the socket's allowance
+  if (!r && rates.size >= RATE_MAX_KEYS) { ip = 'overflow'; r = rates.get(ip); }   // table full: share the socket's allowance
   if (!r || now - r.at > RATE_WINDOW_MS) { r = { at: now, n: 0 }; rates.set(ip, r); }
   return ++r.n <= RATE_MAX;
 }
@@ -200,30 +263,25 @@ const rateTimer = setInterval(() => { const cut = Date.now() - RATE_WINDOW_MS; f
 const MAX_DL_STREAMS = 8;
 let dlStreams = 0;
 
-// ---- Access --------------------------------------------------------------------------
-// The dashboard and its API need the hub's key (the pairing token) — including on the hub PC
-// itself, so another local process or user can't take over the hub through loopback.
-// Browsers get it once from a dashboard link (/?key=…) and keep it in a cookie; the desktop app
-// sends it as a cookie or an Authorization header. Agents only use it to report.
-const keyOk = k => sec.safeEqual(k, config.token);
-function requestKey(req) {
-  const auth = String(req.headers.authorization || '');
-  return auth.startsWith('Bearer ') ? auth.slice(7).trim() : sec.cookie(req.headers.cookie, 'dm_key');
+const directLocal = req => isLoopback(req);
+const localOrigin = () => 'http://127.0.0.1:' + PORT;
+function publicOrigin() { return configuredOrigin || transport.origin(remote.httpsUrl); }
+function audience(req) {
+  if (directLocal(req) && !req.socket.encrypted && !req.headers['x-forwarded-proto']) return localOrigin();
+  const expected = publicOrigin();
+  if (!expected || String(req.headers.host || '').toLowerCase() !== new URL(expected).host) return null;
+  if (req.socket.encrypted) return expected;
+  // Only a locally configured HTTPS proxy may assert transport security.
+  const peer = String(req.headers['x-forwarded-for'] || '').trim();
+  return LOOPBACK.has(req.socket.remoteAddress) && req.headers['x-forwarded-proto'] === 'https' &&
+    net.isIP(peer) && sec.isLocalAddress(peer) ? expected : null;
 }
-const authorized = req => keyOk(requestKey(req));
-const keyCookie = req => `dm_key=${config.token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=34560000${req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : ''}`;
-
-// Desktop apps join with a short one-time code shown in the hub's Add device dialog, so the key
-// itself never has to be typed. One code at a time; it expires after 10 minutes or 5 wrong tries.
-const PAIR_MS = 10 * 60e3;
-let pairing = null;
-
-function hubUrlFor(req) {   // Host was validated by hostAllowed()
-  // Through `tailscale serve` the request arrives as HTTPS with X-Forwarded-Proto and a bare
-  // ts.net Host — render the matching https origin, not a dead http://<host> (port 80).
-  const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-  return `${proto}://${req.headers.host}`;
-}
+const principal = req => access.principal(bearer(req), directLocal(req));
+const isDashboard = who => who && ['root', 'operator', 'client', 'browser'].includes(who.role);
+const lastReport = new Map();
+const downloadsByPeer = new Map();
+const peerAddress = req => LOOPBACK.has(req.socket.remoteAddress) && net.isIP(req.headers['x-forwarded-for'] || '') ?
+  req.headers['x-forwarded-for'] : req.socket.remoteAddress;
 
 // Fills __NAME__ placeholders in an install script. Values land inside single-quoted strings
 // (PowerShell or bash), so a quote in a value can never end the string early.
@@ -234,7 +292,7 @@ function template(file, vars) {
   return text;
 }
 
-function handleReport(raw) {
+function handleReport(raw, signingKey) {
   if (!sec.isValidId(raw.id)) throw new Error('invalid id');
   const id = raw.id;
   if (!registry[id] && Object.keys(registry).length >= MAX_DEVICES) throw new Error('too many devices');
@@ -286,20 +344,18 @@ function handleReport(raw) {
   // injecting one into the plain-HTTP reply. Agents verify before executing.
   if (queued.length) reply.commands = queued.map(({ id: cid, action }) => ({
     id: cid, action,
-    sig: crypto.createHmac('sha256', String(config.token)).update(`device-monitor-cmd:${cid}:${action}`).digest('hex'),
+    sig: crypto.createHmac('sha256', signingKey).update(`device-monitor-cmd:${cid}:${action}`).digest('hex'),
   }));
   return reply;
 }
 
 // ---- Remote access (Tailscale) -----------------------------------------------------
 let remote = { installed: false };
-const refreshRemote = () => tailscale.status(PORT).then(s => { remote = s; }, () => {});
+const refreshRemote = () => fixture ? Promise.resolve() : tailscale.status(PORT).then(s => { remote = s; }, () => {});
 refreshRemote();
 const remoteTimer = setInterval(refreshRemote, 60e3);
 function preferredHubUrl() {
-  if (remote.httpsUrl) return remote.httpsUrl;
-  const lan = lanAddresses().find(a => !/vEthernet|WSL|VirtualBox|VMware|Tailscale/i.test(a.name) && !a.address.startsWith('100.'));
-  return `http://${lan ? lan.address : os.hostname()}:${PORT}`;
+  return publicOrigin() || localOrigin();
 }
 
 // ---- Alerts ---------------------------------------------------------------------------
@@ -312,7 +368,7 @@ function costToday(id) {
   return { cost, currency: config.energy.currency };
 }
 const alerts = new Alerts({
-  dataDir: DATA_DIR, broadcast, costToday, hubUrl: preferredHubUrl,
+  dataDir: DATA_DIR, broadcast, costToday, hubUrl: preferredHubUrl, external: !fixture,
   devices: () => Object.keys(registry).map(id => ({ id, name: registry[id].name, online: Date.now() - (registry[id].lastSeen || 0) < OFFLINE_MS, lastSeen: registry[id].lastSeen })),
 });
 
@@ -383,32 +439,44 @@ function validEnergySettings(b) {
 }
 
 // ---- Routes ---------------------------------------------------------------
-const server = http.createServer(async (req, res) => {
-  if (!sec.hostAllowed(req.headers.host, (config.allowedHosts || []).concat(remote.dnsName || []))) {
-    return send(res, 421, 'This hub only answers requests addressed to it by IP address or its own name.', 'text/plain');
-  }
-  if (!sec.isLocalAddress(req.socket.remoteAddress)) {
-    return send(res, 403, 'This hub only accepts connections from your own network and Tailscale.', 'text/plain');
-  }
-  if (req.method !== 'GET' && req.method !== 'HEAD' && !sec.sameOrigin(req)) return send(res, 403, { error: 'cross-site request refused' });
-  const url = new URL(req.url, 'http://x');
-  const p = url.pathname;
+const handler = async (req, res) => {
   try {
-    // ---- open to anyone on the network ----
-    // (rate-limited: these paths run before the key check)
-    const open = p === '/' || p === '/index.html' || p === '/download' || p === '/download/' || p.startsWith('/download/') || p.startsWith('/api/update/')
-      || p === '/api/downloads' || p === '/api/info' || p === '/api/pair' || p === '/install.ps1' || p === '/install.sh'
-      || p === '/agent.ps1' || p === '/agent.sh' || p === '/agent-macos.sh' || p === '/uninstall.ps1' || p === '/uninstall.sh' || Object.hasOwn(STATIC, p);
-    if (open && !authorized(req) && !rateOk(req)) return send(res, 429, { error: 'too many requests' });
-    if (req.method === 'GET' && (p === '/' || p === '/index.html')) {
-      let key = url.searchParams.get('key');
-      if (key != null) {   // a dashboard link: keep the key in a cookie and take it out of the address bar
-        key = (key.match(/[?&]key=([^&#\s]+)/)?.[1] || key).trim();   // the whole link pasted into the box
-        if (!keyOk(key)) return sendHtml(res, 'locked.html', 403, { ERROR: '<p class="err">That link or key isn’t valid for this hub.</p>' });
-        res.writeHead(302, { ...sec.BASE_HEADERS, 'Set-Cookie': keyCookie(req), Location: '/', 'Cache-Control': 'no-store' });
-        return res.end();
-      }
-      return authorized(req) ? sendHtml(res, 'index.html') : sendHtml(res, 'locked.html', 401);
+    if (!sec.hostAllowed(req.headers.host, (config.allowedHosts || []).concat(remote.dnsName || [], configuredOrigin ? [new URL(configuredOrigin).hostname] : []))) {
+      return send(res, 421, 'This hub only answers requests addressed to it by IP address or its own name.', 'text/plain');
+    }
+    if (!sec.isLocalAddress(req.socket.remoteAddress)) {
+      return send(res, 403, 'This hub only accepts connections from your own network and Tailscale.', 'text/plain');
+    }
+    if (req.method !== 'GET' && req.method !== 'HEAD' && !sec.sameOrigin(req)) return send(res, 403, { error: 'cross-site request refused' });
+    if (!/^\/(?!\/)/.test(req.url) || req.url.includes('\\')) return send(res, 400, { error: 'Invalid request target' });
+    const url = new URL(req.url, 'http://x');
+    const p = url.pathname;
+    const routeOrigin = audience(req);
+    if (!routeOrigin) return send(res, 403, { error: 'Use the configured HTTPS hub address.' });
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.headers.origin && req.headers.origin !== routeOrigin &&
+        !(directLocal(req) && req.headers.origin === 'http://' + req.headers.host)) return send(res, 403, { error: 'cross-site request refused' });
+    const who = principal(req);
+    if (!who && !rateOk(req)) return send(res, 429, { error: 'too many requests' });
+    if (req.method === 'GET' && (p === '/' || p === '/index.html')) return sendHtml(res, 'index.html');
+    if (req.method === 'GET' && p === '/pair') return send(res, 200, 'Paste this complete invitation into Device Monitor → Connect on the computer you want to enroll.', 'text/plain; charset=utf-8');
+    if (req.method === 'GET' && p === '/unlock') return sendHtml(res, 'locked.html');
+    if (req.method === 'POST' && (p === '/api/session' || p === '/api/pair')) {
+      const kind = p === '/api/session' ? 'browser' : 'desktop';
+      const member = access.redeem(bearer(req), kind, routeOrigin);
+      if (!member) return send(res, 403, { error: 'Invitation is invalid, expired or already used.' });
+      return send(res, 200, member);
+    }
+    if (req.method === 'POST' && p === '/api/invites') {
+      if (!isDashboard(who)) return send(res, 401, { error: 'Sign in on the hub first.' });
+      const b = await readBody(req);
+      const issuer = principal(req);
+      if (!issuer || (!['root','operator'].includes(issuer.role) && !(issuer.role === 'client' && b.kind === 'browser'))) return send(res, 403, { error:'Create this invitation on the hub.' });
+      const dest = transport.origin(b.origin, true);
+      if (!dest || (dest !== publicOrigin() && !(directLocal(req) && dest === localOrigin()))) return send(res, 400, { error: 'Configure a trusted HTTPS hub address for remote devices.' });
+      if (b.kind !== 'browser' && !dest.startsWith('https:')) return send(res, 400, { error: 'Remote enrollment requires HTTPS.' });
+      if (b.id != null && (!sec.isValidId(b.id) || !registry[b.id])) return send(res, 400, { error: 'Choose an existing device or leave it blank.' });
+      const code = access.issue(b.kind, dest, b.id, issuer.id);
+      return send(res, 200, { code, origin: dest, expires: Date.now() + 600000 });
     }
     if (req.method === 'GET' && (p === '/download' || p === '/download/')) {
       return sendHtml(res, 'download.html');
@@ -429,72 +497,63 @@ const server = http.createServer(async (req, res) => {
       const name = path.basename(decodeURIComponent(p.slice('/download/'.length)));
       const file = listDownloads().find(d => d.name === name);
       if (!file) return send(res, 404, { error: 'not found' });
+      const peer = peerAddress(req), mine = downloadsByPeer.get(peer) || 0;
+      if (mine >= 2) return send(res, 429, { error: 'Too many downloads from this address' });
       if (dlStreams >= MAX_DL_STREAMS) return send(res, 503, { error: 'too many downloads in progress' });
-      dlStreams++;
-      res.writeHead(200, {
-        ...sec.BASE_HEADERS,
-        'Content-Type': 'application/octet-stream',
-        'Content-Length': file.size,
-        'Content-Disposition': `attachment; filename="${name.replace(/"/g, '')}"`,
-      });
-      res.on('close', () => dlStreams--);
-      return fs.createReadStream(path.join(DOWNLOADS_DIR, name)).on('error', () => res.destroy()).pipe(res);
+      dlStreams++; downloadsByPeer.set(peer, mine + 1);
+      const deadline = setTimeout(() => res.destroy(), 10 * 60e3);
+      try {
+        res.setTimeout(15000, () => res.destroy());
+        res.writeHead(200, { ...sec.BASE_HEADERS, 'Content-Type':'application/octet-stream', 'Content-Length':file.size,
+          'Content-Disposition':"attachment; filename*=UTF-8''" + encodeURIComponent(name).replace(/'/g, '%27') });
+        await pipeline(fs.createReadStream(path.join(DOWNLOADS_DIR, name)), res);
+      } finally {
+        clearTimeout(deadline); dlStreams--;
+        const left = downloadsByPeer.get(peer) - 1;
+        if (left) downloadsByPeer.set(peer, left); else downloadsByPeer.delete(peer);
+      }
+      return;
     }
     if (req.method === 'GET' && p === '/api/info') {
-      if (!authorized(req)) {
-        const nonce = url.searchParams.get('nonce');
-        const proof = nonce && /^[a-f0-9]{16,64}$/.test(nonce) ? hubProof(config.token, nonce) : undefined;
-        return send(res, 200, { app: 'device-monitor', hostname: os.hostname(), port: PORT, locked: true, proof });
-      }
-      return send(res, 200, { token: config.token, port: PORT, addresses: lanAddresses(), hostname: os.hostname(), remote: { urls: remote.urls || [] } });
+      if (!isDashboard(who)) return send(res, 200, { app: 'device-monitor', locked: true });
+      return send(res, 200, { app: 'device-monitor', hostname: os.hostname(), port: PORT, canEnroll:['root','operator'].includes(who.role), canShare:who.role !== 'browser', origin: publicOrigin(), localOrigin: directLocal(req) ? localOrigin() : null });
     }
     if (req.method === 'POST' && p === '/api/report') {
-      const body = await readBody(req);
-      if (!body || typeof body !== 'object' || !keyOk(body.token)) return send(res, 401, { error: 'bad token' });
-      return send(res, 200, handleReport(body));
-    }
-    if (req.method === 'POST' && p === '/api/pair') {
-      const { code } = await readBody(req);
-      if (!pairing || Date.now() > pairing.expires) return send(res, 403, { error: 'No pairing code is active. On the hub, click + (Add device) → Desktop app to get one.' });
-      if (!sec.safeEqual(String(code ?? '').replace(/\D/g, ''), pairing.code)) {
-        if (++pairing.tries >= 5) pairing = null;
-        return send(res, 403, { error: pairing ? 'Wrong pairing code.' : 'Wrong pairing code. Too many tries: get a new code from the hub.' });
+      if (!who || !['local-agent', 'agent'].includes(who.role)) return send(res, 401, { error: 'Re-enroll this agent to obtain a device credential.' });
+      const rateId = who.id || 'local/agent', now = Date.now();
+      if (now - (lastReport.get(rateId) || 0) < 1000) return send(res, 429, { error: 'Reports are limited to one per second.' });
+      lastReport.set(rateId, now);
+      const b = await readBody(req);
+      if (!b || typeof b !== 'object' || Array.isArray(b)) return send(res, 400, { error: 'Invalid report' });
+      if (who.role === 'agent') {
+        if (!access.principal(bearer(req)) || b.id !== who.id) return send(res, 403, { error: 'Report identity does not match its enrollment.' });
       }
-      pairing = null;
-      broadcast({ type: 'paired' });
-      return send(res, 200, { token: config.token });
+      return send(res, 200, handleReport(b, bearer(req)));
     }
-    // Installer / agent scripts. The installer needs the token (sent as a Bearer header — the
-    // ?token= form still works for old commands but keeps the key out of URLs going forward).
-    // The reply pins the agent script's SHA-256 so the installer can check the second download.
     if (req.method === 'GET' && (p === '/install.ps1' || p === '/install.sh')) {
-      if (!keyOk(url.searchParams.get('token') || requestKey(req))) return send(res, 403, 'echo "Invalid or missing token"\n', 'text/plain');
+      if (!routeOrigin.startsWith('https:')) return send(res, 403, 'Agent installation requires HTTPS.', 'text/plain');
+      const member = access.redeem(bearer(req), 'agent', routeOrigin);
+      if (!member) return send(res, 403, 'Invalid or expired agent invitation.', 'text/plain');
       const sha256 = f => crypto.createHash('sha256').update(fs.readFileSync(path.join(ROOT, 'agent', f))).digest('hex');
       return send(res, 200, template(path.basename(p), {
-        HUB: hubUrlFor(req), TOKEN: config.token, SHA_AGENT: sha256('agent.sh'), SHA_AGENT_MAC: sha256('agent-macos.sh'), SHA_AGENT_PS1: sha256('agent.ps1'),
+        HUB: routeOrigin, TOKEN: member.agent, DEVICE_ID: member.id,
+        SHA_AGENT: sha256('agent.sh'), SHA_AGENT_MAC: sha256('agent-macos.sh'), SHA_AGENT_PS1: sha256('agent.ps1'),
       }), 'text/plain; charset=utf-8');
     }
     if (req.method === 'GET' && (p === '/agent.ps1' || p === '/agent.sh' || p === '/agent-macos.sh' || p === '/uninstall.ps1' || p === '/uninstall.sh')) {
       return send(res, 200, fs.readFileSync(path.join(ROOT, 'agent', path.basename(p))), 'text/plain; charset=utf-8');
     }
 
-    // ---- everything else needs the key ----
-    if (!authorized(req)) return send(res, 401, { error: 'This dashboard is locked. Open it with the dashboard link from the Device Monitor app.' });
-    if (req.method === 'POST' && p === '/api/pair/code') {
-      pairing = { code: String(crypto.randomInt(0, 1e6)).padStart(6, '0'), expires: Date.now() + PAIR_MS, tries: 0 };
-      return send(res, 200, { code: pairing.code, expires: pairing.expires });
+    if (!isDashboard(who)) return send(res, 401, { error: 'Open a fresh dashboard invitation.' });
+    if (req.method === 'POST' && p === '/api/logout') { access.logout(bearer(req)); return send(res, 200, { ok:true }); }
+    if (req.method === 'POST' && p === '/api/sessions/revoke') {
+      if (!directLocal(req) || !['root','operator'].includes(who.role)) return send(res, 403, { error:'Use the hub app to revoke all browser sessions.' });
+      access.clearSessions(); return send(res, 200, {ok:true});
     }
     if (req.method === 'GET' && p === '/api/devices') {
       return send(res, 200, Object.keys(registry).map(deviceView));
     }
-    if (req.method === 'GET' && p === '/api/stream') {
-      if (clients.size >= MAX_STREAMS) return send(res, 503, { error: 'too many connections' });
-      res.writeHead(200, { ...sec.BASE_HEADERS, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
-      res.write(`data: ${JSON.stringify({ type: 'snapshot', devices: Object.keys(registry).map(deviceView) })}\n\n`);
-      clients.add(res);
-      req.on('close', () => clients.delete(res));
-      return;
-    }
+    if (req.method === 'GET' && p === '/api/stream') return await streamDashboard(req, res);
     if (req.method === 'GET' && p === '/api/energy') {
       const bounds = String(url.searchParams.get('bounds') || '').split(',').map(Number);
       const ok = bounds.length >= 2 && bounds.length <= 800 && bounds.every((v, i) => Number.isFinite(v) && (i === 0 || v > bounds[i - 1]))
@@ -521,12 +580,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && p === '/api/alerts/test') return send(res, 200, await alerts.test());
     if (req.method === 'DELETE' && p === '/api/alerts/log') { alerts.events = []; writeJson(path.join(DATA_DIR, 'alerts-log.json'), [], 0); return send(res, 200, { ok: true }); }
     if (req.method === 'GET' && p === '/api/remote') {
-      remote = await tailscale.status(PORT, { fresh: url.searchParams.has('fresh') });
-      return send(res, 200, { ...remote, port: PORT, canConfigure: isLoopback(req), platform: process.platform });
+      if (!fixture) remote = await tailscale.status(PORT, { fresh: url.searchParams.has('fresh') });
+      return send(res, 200, { ...remote, port: PORT, canConfigure: !fixture && isLoopback(req) && ['root','operator'].includes(who.role), platform: process.platform });
     }
     if (req.method === 'POST' && p === '/api/remote/https') {
       // Changes this PC's Tailscale setup, so only the hub PC itself may do it.
-      if (!isLoopback(req)) return send(res, 403, { error: 'Turn this on from the Device Monitor app on the hub PC.' });
+      if (fixture || !isLoopback(req) || !['root','operator'].includes(who.role)) return send(res, 403, { error: 'Turn this on from the Device Monitor app on the hub PC.' });
       const body = await readBody(req);
       const r = await tailscale.setHttps(PORT, body.enable !== false);
       remote = r.status || remote;
@@ -564,6 +623,7 @@ const server = http.createServer(async (req, res) => {
       const reg = registry[pid], latest = live[pid]?.latest;
       if (action === 'wake') {
         if (!reg.macs?.length) return send(res, 400, { error: "This device hasn't reported a network card address yet." });
+        if (fixture) return send(res, 403, { error: 'Host integrations disabled' });
         await discovery.wake(reg.macs);
         broadcast({ type: 'actionResult', id: pid, name: reg.name, result: { ok: true, message: 'Wake-up signal sent.' } });
         return send(res, 200, { ok: true });
@@ -587,6 +647,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, deviceView(id));
       }
       if (req.method === 'DELETE') {
+        access.revoke(id); lastReport.delete(id);
         delete registry[id]; delete live[id]; history.remove(id); alerts.removeDevice(id); commands.delete(id); procWatch.delete(id);
         saveRegistry();
         broadcast({ type: 'removed', id });
@@ -596,36 +657,52 @@ const server = http.createServer(async (req, res) => {
     send(res, 404, { error: 'not found' });
   } catch (e) {
     if (res.headersSent) res.destroy();   // never let one bad request take the hub down
-    else send(res, 400, { error: String(e.message || e) });
+    else if (!res.destroyed) send(res, e.status || 400, { error: String(e.message || e) });
   }
-});
+};
 
-return new Promise((resolve, reject) => {
-  server.once('error', reject);
-  server.listen(PORT, '::', () => { // dual-stack: IPv4 + IPv6
-    const responder = discovery.respond({ port: PORT });
-    resolve({
-      port: PORT, token: config.token, addresses: lanAddresses(),
-      close: () => { if (saveTimer) { clearTimeout(saveTimer); writeJson(DEVICES_FILE, registry); } alerts.close(); clearInterval(remoteTimer); clearInterval(rateTimer); downloadsWatch?.close(); clearTimeout(watchTimer); history.close(); responder.close(); clearInterval(statusTimer); for (const c of clients) c.destroy(); server.close(); },
-    });
+const server = http.createServer(handler);
+const secureServer = tlsOptions ? https.createServer(tlsOptions, handler) : null;
+function close() {
+  if (saveTimer) { clearTimeout(saveTimer); writeJson(DEVICES_FILE, registry); }
+  access.close(); alerts.close(); clearInterval(remoteTimer); clearInterval(rateTimer); downloadsWatch?.close();
+  clearTimeout(watchTimer); history.close(); clearInterval(statusTimer);
+  for (const res of clients.keys()) res.destroy();
+  for (const listener of [server, secureServer]) if (listener) { listener.close(); listener.closeAllConnections(); }
+}
+function listen(listener, n, host) {
+  listener.maxConnections = 256; listener.headersTimeout = 10000; listener.requestTimeout = 15000;
+  return new Promise((resolve, reject) => {
+    listener.once('error', reject);
+    listener.listen(n, host, () => { listener.removeListener('error', reject); resolve(); });
   });
-});
+}
+return (async () => {
+  try {
+    await listen(server, PORT, '127.0.0.1');
+    PORT = server.address().port;
+    if (secureServer) await listen(secureServer, Number(new URL(configuredOrigin).port) || 443, fixture ? '127.0.0.1' : '::');
+    if (headlessInvites) access.openOperatorMailbox(PORT);
+    return { port: PORT, localKey: access.config.localKey, agentToken: access.localAgent, publicOrigin, addresses: lanAddresses(), close,
+      ...(fixture ? { seedReport: b => handleReport(b, access.localAgent), browserLink: () => localOrigin() + '/unlock#join=' + access.issue('browser', localOrigin()) } : {}) };
+  } catch (e) { close(); throw e; }
+})();
 }
 
-module.exports = { startHub, lanAddresses, hubProof };
+module.exports = { startHub, lanAddresses };
 
 // Headless mode: `node server.js` (e.g. on a home server). Also monitors this machine.
 if (require.main === module) {
   const port = Number(process.env.PORT) || 7777;
-  startHub({ port }).then(hub => {
-    console.log('Device Monitor hub running');
-    console.log(`  This PC:       http://localhost:${port}/?key=${hub.token}   (open this link once — the key goes in a cookie)`);
-    for (const a of hub.addresses) console.log(`  Other devices: http://${a.address}:${port}/?key=${hub.token}   (${a.name})`);
-    if (!process.env.NO_LOCAL_AGENT) startAgent({ hub: `http://127.0.0.1:${port}`, token: hub.token, scriptDir: path.join(__dirname, 'agent') });
-  }, e => {
-    console.error(e.code === 'EADDRINUSE' ? `Port ${port} is already in use — is the hub already running?` : e);
-    process.exit(1);
-  });
+  if (process.argv.includes('--invite')) {
+    (async () => {
+      if (!process.stdout.isTTY) throw new Error('Use an interactive terminal to display an invitation.');
+      console.log(localOperatorLink(path.join(__dirname, 'data'), port));
+    })().catch(e => { console.error(e.message); process.exitCode = 1; });
+  } else startHub({ port, headlessInvites:true }).then(hub => {
+    console.log('Device Monitor hub listening locally on port ' + hub.port + '. Run node server.js --invite to open a dashboard.');
+    if (!process.env.NO_LOCAL_AGENT) startAgent({ hub: 'http://127.0.0.1:' + hub.port, token: hub.agentToken, scriptDir: path.join(__dirname, 'agent') });
+  }, e => { console.error(e.message); process.exitCode = 1; });
   process.on('SIGINT', () => process.exit());
   process.on('SIGTERM', () => process.exit());
 }

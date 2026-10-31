@@ -1,2 +1,2 @@
 #!/bin/bash
-while [ $# -gt 0 ]; do [ "$1" = "--data-binary" ] && { printf '%s\n' "$2" >> "$MOCK_STATE/bodies"; }; shift; done
+while [ $# -gt 0 ]; do [ "$1" = "--data-binary" ] && { if [ "$2" = '@-' ]; then cat >> "$MOCK_STATE/bodies"; printf '\n' >> "$MOCK_STATE/bodies"; else printf '%s\n' "$2" >> "$MOCK_STATE/bodies"; fi; }; shift; done

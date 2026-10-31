@@ -1,6 +1,5 @@
 # Device Monitor agent for Windows. Collects metrics and posts them to the hub.
-# Usage: agent.ps1 -Hub http://192.168.1.10:7777 -Token <token>
-#        (or put hub/token in config.json next to this script)
+# Standalone enrollment supplies the HTTPS origin, scoped token and id in config.json.
 param(
   [string]$Hub,
   [string]$Token,
@@ -12,13 +11,17 @@ $ProgressPreference = 'SilentlyContinue'
 
 $cfgPath = Join-Path $PSScriptRoot 'config.json'
 if (-not $Token -and $env:DM_TOKEN) { $Token = $env:DM_TOKEN }   # set by the desktop app
-if ((-not $Hub -or -not $Token) -and (Test-Path $cfgPath)) {
+$pipeMode = $env:DM_REPORT_PIPE -eq '1'
+if ($pipeMode) { [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false) }
+if (-not $pipeMode -and (Test-Path $cfgPath)) {
   $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
   if (-not $Hub) { $Hub = $cfg.hub }
   if (-not $Token) { $Token = $cfg.token }
 }
-if (-not $Hub -or -not $Token) { Write-Error 'Hub and Token are required'; exit 1 }
-$Hub = $Hub.TrimEnd('/')
+if (-not $pipeMode) {
+  if (-not $Token -or -not $cfg.id -or ([uri]$Hub).Scheme -ne 'https') { Write-Error 'Re-enroll with an HTTPS agent invitation'; exit 1 }
+  $Hub = $Hub.TrimEnd('/')
+}
 
 $deviceId = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid
 if (-not $deviceId) { $deviceId = $env:COMPUTERNAME }
@@ -110,7 +113,7 @@ while ($true) {
   if ($ParentPid -and -not (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue)) { exit 0 }
   $now = [DateTime]::UtcNow
   $payload = [ordered]@{
-    id = $deviceId; token = $Token; hostname = $env:COMPUTERNAME; platform = 'windows'; os = $osName
+    id = $(if ($pipeMode) { $deviceId } else { $cfg.id }); hostname = $env:COMPUTERNAME; platform = 'windows'; os = $osName
     uptime = [int]((Get-Date) - $osInfo.LastBootUpTime).TotalSeconds; formFactor = $formFactor
   }
   if ($env:DM_APP_VERSION) { $payload.appVersion = $env:DM_APP_VERSION }   # set when run by the desktop app
@@ -217,7 +220,8 @@ while ($true) {
   if ($null -ne $usage) {
     try {
       $json = $payload | ConvertTo-Json -Depth 6 -Compress
-      Invoke-RestMethod -Uri "$Hub/api/report" -Method Post -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json' -TimeoutSec 5 | Out-Null
+      if ($pipeMode) { [Console]::WriteLine($json) }
+      else { Invoke-RestMethod -UseBasicParsing -MaximumRedirection 0 -Uri "$Hub/api/report" -Method Post -Headers @{Authorization="Bearer $Token"} -Body ([Text.Encoding]::UTF8.GetBytes($json)) -ContentType 'application/json' -TimeoutSec 5 | Out-Null }
     } catch { }
   }
   $elapsed = ([DateTime]::UtcNow - $now).TotalMilliseconds

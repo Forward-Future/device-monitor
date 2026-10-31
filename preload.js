@@ -3,7 +3,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('deviceMonitorApp', {
-  discover: () => ipcRenderer.invoke('dm:discover'),
   setup: opts => ipcRenderer.invoke('dm:setup', opts),
   retry: () => ipcRenderer.invoke('dm:retry'),
   changeSetup: () => ipcRenderer.invoke('dm:change-setup'),
