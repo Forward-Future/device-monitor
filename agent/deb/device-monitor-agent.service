@@ -1,0 +1,21 @@
+[Unit]
+Description=Device Monitor agent
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/device-monitor/config
+
+[Service]
+Environment=DM_CONFIG=/etc/device-monitor/config
+ExecStart=/usr/bin/bash /usr/lib/device-monitor/agent.sh
+Restart=always
+RestartSec=5
+# Root reads the CPU power counters and Proxmox storage. Nothing here needs to write.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

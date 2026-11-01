@@ -12,6 +12,7 @@ const os = require('os');
 const crypto = require('crypto');
 const net = require('net');
 const { startAgent } = require('./agent-runner');
+const { agentDeb } = require('./deb');
 const discovery = require('./discovery');
 const { HistoryStore } = require('./history');
 const power = require('./power');
@@ -572,6 +573,14 @@ const handler = async (req, res) => {
     }
     if (req.method === 'GET' && (p === '/agent.ps1' || p === '/agent.sh' || p === '/agent-macos.sh' || p === '/uninstall.ps1' || p === '/uninstall.sh')) {
       return send(res, 200, fs.readFileSync(path.join(ROOT, 'agent', path.basename(p))), 'text/plain; charset=utf-8');
+    }
+    if (req.method === 'GET' && p === '/device-monitor-agent.deb') return send(res, 200, agentDeb(), 'application/vnd.debian.binary-package');
+    // The server package enrolls with plain values, so root never runs a script from the hub.
+    if (req.method === 'POST' && p === '/api/agent/enroll') {
+      if (!routeOrigin.startsWith('https:')) return send(res, 403, 'Agent enrollment requires HTTPS.', 'text/plain');
+      const member = access.redeem(bearer(req), 'agent', routeOrigin);
+      if (!member) return send(res, 403, 'Invalid or expired agent invitation.', 'text/plain');
+      return send(res, 200, `${member.id}\n${member.agent}\n`, 'text/plain; charset=utf-8');
     }
 
     if (!isDashboard(who)) return send(res, 401, { error: 'Open a fresh dashboard invitation.' });

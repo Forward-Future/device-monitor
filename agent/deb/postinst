@@ -1,0 +1,13 @@
+#!/bin/sh
+set -e
+[ "$1" = configure ] || exit 0
+[ -d /run/systemd/system ] && systemctl daemon-reload
+if [ -f /etc/device-monitor/config ]; then
+  if [ -d /run/systemd/system ]; then
+    systemctl enable device-monitor-agent.service >/dev/null 2>&1 || true
+    systemctl restart device-monitor-agent.service || true
+  fi
+else
+  echo 'Device Monitor agent installed. Connect it with the command from the hub: + Add device -> Proxmox / Debian.'
+fi
+exit 0

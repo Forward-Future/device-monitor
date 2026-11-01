@@ -13,6 +13,7 @@
     "icon": "node build/make-icon.js",
     "dist": "node build/make-icon.js && electron-builder --win nsis",
     "dist:mac": "node build/make-icon.js && electron-builder --mac dmg zip --universal",
+    "deb": "node deb.js",
     "release": "node build/release.js"
   },
   "build": {
@@ -24,6 +25,8 @@
       "server.js",
       "access.js",
       "desktop-identity.js",
+      "deb.js",
+      "LICENSE",
       "transport.js",
       "agent-runner.js",
       "discovery.js",

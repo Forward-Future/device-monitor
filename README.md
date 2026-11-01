@@ -88,6 +88,7 @@ The app isn't notarized, so the first time you open it, **right-click → Open**
 
 - **Another Windows PC**: install the app and choose **Connect**. If you don't want the full app there, use the installer command from the dashboard's **+ Add device** dialog. It installs a small background agent with no admin rights needed.
 - **Mac / Linux without the app**: run the `curl … | bash` command from **+ Add device**. It installs a background agent (a LaunchAgent on macOS, a systemd user service on Linux) with no sudo needed.
+- **Proxmox and Debian-based servers**: open the **Proxmox / Debian server** tab in **+ Add device** and run its command as root on the server. It installs the `device-monitor-agent` package, a headless systemd service with no desktop or Node. The hub builds that `.deb` itself, so its version matches the hub, and it's the same download at `/device-monitor-agent.deb`. On Proxmox, cards show the Proxmox version and local block storage such as `local-lvm`, and network totals count physical NICs only. To update, run a fresh command. To remove the agent, run `apt purge device-monitor-agent`.
 
 ## Viewing from a phone, tablet or browser
 
@@ -145,6 +146,7 @@ npm run hub        # headless hub only (e.g. on a home server), dashboard at :77
 | `history.js` | Metric history (raw last hour + 1-minute averages for 30 days, on disk) |
 | `power.js` | Power estimates (watts at the wall) used for electricity use and cost |
 | `agent-runner.js`, `agent/` | Metric agents (Windows PowerShell, macOS and Linux bash) and their one-line installers |
+| `deb.js`, `agent/deb/` | Builds the headless `device-monitor-agent` package for Proxmox and Debian servers (`npm run deb` writes a copy to `dist/`) |
 | `build/screenshots.js` | Regenerates the README screenshots in `docs/screenshots/` from a demo hub |
 | `build/test/` | Test fixtures: seeded test hub, macOS command mocks for the Mac agent |
 | `public/index.html` | Dashboard UI |
