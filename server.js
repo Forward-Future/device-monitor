@@ -22,7 +22,7 @@ const sec = require('./security');
 
 const LIVE_HISTORY_MS = 10 * 60 * 1000; // raw samples sent to dashboards on connect
 const RANGES = { '10m': 10 * 60e3, '1h': 60 * 60e3, '6h': 6 * 3600e3, '24h': 24 * 3600e3, '7d': 7 * 86400e3, '30d': 30 * 86400e3 };
-const OFFLINE_MS = 10000;
+const OFFLINE_MS = 30_000;    // Allow for slow sensor reads and transient network delays between reports.
 const MAX_DEVICES = 250;      // caps registry/history growth from bogus reports
 const MAX_STREAMS = 64;       // concurrent dashboard connections
 const COMMAND_TTL = 60e3;     // power actions not picked up by the device within a minute are dropped

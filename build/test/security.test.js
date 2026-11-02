@@ -468,6 +468,30 @@ test('case-distinct legacy files keep their own untagged rows on case-sensitive 
   if(sensitive){assert.equal(h.minutes.get('Rack')[0].cpu,12);assert.equal(h.minutes.get('rack')[0].cpu,55);}
   else{assert.ok(fs.existsSync(path.join(location,'Rack.ndjson.unassigned')));}
 });
+test('brief reporting gaps keep a device online, and it recovers after an outage', async t => {
+  const { h, call } = await fixture(t);
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const report = () => h.seedReport({ id: 'slow-pc' });
+  async function online() {
+    const response = await call('/api/devices', { key: h.localKey });
+    assert.equal(response.status, 200);
+    const [device] = await response.json();
+    return device.online;
+  }
+
+  report();
+  now += 19000;
+  assert.equal(await online(), true);
+  report();
+  now += 29999;
+  assert.equal(await online(), true);
+  now += 1;
+  assert.equal(await online(), false);
+  report();
+  assert.equal(await online(), true);
+});
+
 test('a healthy stream can receive a legitimate event larger than the backlog budget',async t=>{
   const {h}=await fixture(t);
   const peer=await new Promise((ok,no)=>http.get({host:'127.0.0.1',port:h.port,path:'/api/stream',headers:{Authorization:'Bearer '+h.localKey}},ok).on('error',no));
