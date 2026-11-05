@@ -262,6 +262,27 @@ function loadMain() {
 // A small frameless window with a live card per device. It sits on the desktop like a widget
 // (not always on top), is dragged anywhere, and is turned on or off from the tray menu.
 const WIDGET_URL = DASHBOARD + 'widget', WIDGET_WIDTH = 300;
+// Windows' Show desktop (Win+D) brings the desktop window to the front, and nothing can be raised above
+// it while it shows, so an ordinary window disappears along with the apps. A window owned by the desktop
+// window (Progman) comes forward with it instead. Electron has no API for a native owner, so one
+// PowerShell call sets it on the widget's handle, and also keeps the widget visible during Peek.
+function pinToDesktop(w) {
+  if (!IS_WIN) return;
+  const h = w.getNativeWindowHandle(), hwnd = (h.length >= 8 ? h.readBigUInt64LE() : h.readUInt32LE()).toString();
+  const ps = [
+    "Add-Type -Namespace DM -Name Win -MemberDefinition '" +
+      '[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, IntPtr title);' +
+      '[DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] public static extern IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value);' +
+      '[DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);' + "'",
+    // After an Explorer restart the desktop window takes a moment to come back.
+    "for ($i = 0; $i -lt 20 -and ($d = [DM.Win]::FindWindow('Progman', [IntPtr]::Zero)) -eq [IntPtr]::Zero; $i++) { Start-Sleep 1 }",
+    "if ($d -eq [IntPtr]::Zero) { exit 1 }",
+    `[void][DM.Win]::SetWindowLongPtr([IntPtr]${hwnd}, -8, $d)`,                       // GWLP_HWNDPARENT: the owner
+    `$on = 1; [void][DM.Win]::DwmSetWindowAttribute([IntPtr]${hwnd}, 12, [ref]$on, 4)`, // DWMWA_EXCLUDED_FROM_PEEK
+  ].join("\n");
+  execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')],
+    { windowsHide: true, timeout: 60e3 }, err => { if (err) console.error('widget: could not pin to the desktop', err.message); });
+}
 function createWidget() {
   if (widget) return widget.showInactive();
   let { x, y } = settings.widget || {};
@@ -271,19 +292,27 @@ function createWidget() {
   widget = new BrowserWindow({
     x, y, width: WIDGET_WIDTH, height: 120, show: false, frame: false, transparent: true, backgroundColor: '#00000000',
     resizable: false, minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true, hasShadow: false,
+    // Clicking it never takes focus, so it can't pull its owner, the desktop, over your apps.
+    ...(IS_WIN ? { focusable: false } : {}),
     title: 'Device Monitor widget', icon: ICON,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true, sandbox: true, nodeIntegration: false, webviewTag: false, spellcheck: false,
     },
   });
+  pinToDesktop(widget);
   widget.once('ready-to-show', () => widget?.showInactive());
   widget.on('moved', () => {
     if (!widget) return;
     const [wx, wy] = widget.getPosition();
     settings.widget = { ...settings.widget, x: wx, y: wy }; saveSettingsSoon();
   });
-  widget.on('closed', () => { widget = null; buildTrayMenu(); });
+  widget.on('closed', () => {
+    widget = null; buildTrayMenu();
+    // Closed while still turned on: Explorer restarted and took its desktop window, and the widget it owns,
+    // with it. Bring the widget back on the new desktop.
+    if (!quitting && settings.mode && settings.widget?.enabled) setTimeout(() => { if (!widget && !quitting && settings.mode && settings.widget?.enabled) createWidget(); }, 3000);
+  });
   widget.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   const stay = (e, url) => { if (url !== WIDGET_URL) e.preventDefault(); };
   widget.webContents.on('will-navigate', stay);
@@ -509,7 +538,9 @@ if (!app.requestSingleInstanceLock()) {
     updater.start();
     const atLogin = process.argv.includes('--startup') || (IS_MAC && app.getLoginItemSettings().wasOpenedAtLogin);
     const hidden = process.argv.includes('--hidden') || (atLogin && settings.startMinimized === true);
-    createWindow({ show: !(hidden && settings.mode) });
+    // A hidden start runs only the hub, the agent and the widget; the dashboard window (and its renderer)
+    // is created the first time it's opened.
+    if (!hidden || !settings.mode) createWindow({ show: true });
     if (settings.mode && settings.widget?.enabled) createWidget();
   });
   app.on('before-quit', () => {
