@@ -1,0 +1,5 @@
+#!/bin/sh
+set -e
+[ "$1" = purge ] && rm -rf /etc/device-monitor
+if [ -d /run/systemd/system ]; then systemctl daemon-reload || true; fi
+exit 0

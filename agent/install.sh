@@ -46,6 +46,11 @@ PLIST
   exit 0
 fi
 
+if [ -x /usr/sbin/device-monitor-enroll ]; then
+  echo 'This server has the device-monitor-agent package. Use a new invitation from the Proxmox / Debian tab.' >&2
+  exit 1
+fi
+
 DIR="$HOME/.local/share/device-monitor"
 mkdir -p "$DIR"
 pkill -f "$DIR/agent.sh" 2>/dev/null || true

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Device Monitor Linux collector. A standalone enrollment supplies config beside this script.
 DIR="$(cd "$(dirname "$0")" && pwd)"
-[ "$DM_REPORT_PIPE" != 1 ] && [ -f "$DIR/config" ] && . "$DIR/config"
+CONFIG="${DM_CONFIG:-$DIR/config}"   # the server package keeps it in /etc/device-monitor
+[ "$DM_REPORT_PIPE" != 1 ] && [ -f "$CONFIG" ] && . "$CONFIG"
 INTERVAL="${INTERVAL:-2}"
 if [ "$DM_REPORT_PIPE" != 1 ]; then
   [[ "$HUB" == https://* && -n "$DEVICE_ID" && "$TOKEN" =~ ^[A-Za-z0-9_-]{43}$ ]] || { echo 'Re-enroll with an HTTPS agent invitation' >&2; exit 1; }
@@ -11,6 +12,8 @@ HUB="${HUB%/}"
 ID="$(cat /etc/machine-id 2>/dev/null || cat /var/lib/dbus/machine-id 2>/dev/null || hostname)"
 HOST="$(hostname)"
 OS="$( . /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}")"
+PVE="$(pveversion 2>/dev/null | sed -n 's#^pve-manager/\([0-9.]*\).*#\1#p')"
+[ -n "$PVE" ] && OS="Proxmox VE $PVE"
 CPU_NAME="$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//')"
 [ -z "$CPU_NAME" ] && CPU_NAME="$(lscpu 2>/dev/null | awk -F: '/^Model name/ { sub(/^ +/, "", $2); print $2; exit }')"  # ARM
 [ -z "$CPU_NAME" ] && CPU_NAME="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null)"
@@ -23,7 +26,14 @@ esc() { printf '%s' "$1" | tr -d '"\\' | tr -d '[:cntrl:]'; }  # strip chars tha
 num() { [[ "$1" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] && echo "$1" || echo null; }
 
 read_cpu() { awk '/^cpu/ { idle=$5+$6; t=0; for(i=2;i<=NF;i++) t+=$i; print $1, idle, t }' /proc/stat; }
-read_net() { awk -F'[: ]+' 'NR>2 && $2!="lo" { rx+=$3; tx+=$11 } END { print rx+0, tx+0 }' /proc/net/dev; }
+# Bridges, veths and tunnels repeat a NIC's traffic, so count interfaces with a backing device.
+# A container has none of those: count everything but loopback there.
+read_net() {
+  local dev nics=""
+  for dev in /sys/class/net/*/device; do [ -e "$dev" ] && { dev="${dev%/device}"; nics="$nics ${dev##*/}"; }; done
+  awk -F'[: ]+' -v nics="$nics" 'BEGIN { n=split(nics, a, " "); for (i=1; i<=n; i++) want[a[i]]=1 }
+    NR>2 { sub(/^ +/, ""); if ($1!="lo" && (!n || $1 in want)) { rx+=$2; tx+=$10 } } END { print rx+0, tx+0 }' /proc/net/dev
+}
 read_disk() { awk '$3 ~ /^(sd[a-z]+|nvme[0-9]+n[0-9]+|vd[a-z]+|mmcblk[0-9]+)$/ { r+=$6; w+=$10 } END { print r*512, w*512 }' /proc/diskstats; }
 
 cpu_temp() {
@@ -49,6 +59,12 @@ grace_power() {
     [ "$(cat "$h/name" 2>/dev/null)" = power_meter ] || continue
     case "$(cat "$h/power1_oem_info" 2>/dev/null)" in "Grace Power Socket"*) cat "$h/power1_average" 2>/dev/null ;; esac
   done | awk '{ s+=$1; n++ } END { if (n) printf "%.1f", s/1e6 }'
+}
+# Proxmox guests live on block storage that isn't mounted, so df can't see it. pvesm is slow and
+# can stall on a dead storage, so it runs on a timeout and only every 15th report.
+pve_storage() {
+  timeout 5 pvesm status 2>/dev/null | awk 'NR>1 && $3=="active" && $2 ~ /^(lvmthin|lvm|zfspool|btrfs)$/ && $4>0 {
+    gsub(/"/, "", $1); printf "%s{\"name\":\"%s\",\"total\":%.0f,\"used\":%.0f}", (n++?",":""), $1, $4*1024, $5*1024 }'
 }
 read_rapl() {
   for z in /sys/class/powercap/intel-rapl:[0-9]; do [ -r "$z/energy_uj" ] && echo "$(cat "$z/energy_uj") $(cat "$z/max_energy_range_uj" 2>/dev/null || echo 0)"; done
@@ -132,7 +148,7 @@ if not any(g['app'] == 'ComfyUI' for g in groups) and (get('http://127.0.0.1:818
     if g['models']: groups.append(g)
 print(json.dumps(groups[:8], separators=(',', ':')))
 PY
-AI_N=0
+AI_N=0; PVE_N=0; PVE_DISKS=""
 PREV_CPU="$(read_cpu)"; PREV_NET="$(read_net)"; PREV_DISK="$(read_disk)"; PREV_T=$(date +%s.%N)
 sleep "$INTERVAL"
 while true; do
@@ -156,7 +172,9 @@ while true; do
   MHZ="$(awk -F: '/cpu MHz/ { s+=$2; n++ } END { if(n) printf "%.0f", s/n; else print "null" }' /proc/cpuinfo)"
   [ "$MHZ" = "null" ] && [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq ] && MHZ=$(( $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) / 1000 ))
   UPTIME="$(cut -d. -f1 /proc/uptime)"
-  DISKS="$(df -B1 -x tmpfs -x devtmpfs -x squashfs -x overlay -x efivarfs -x 9p -x drvfs 2>/dev/null | awk 'NR>1 && $6 !~ /^\/(boot|snap|init$|usr\/lib\/wsl|mnt\/wsl)/ { gsub(/"/,"",$6); printf "%s{\"name\":\"%s\",\"total\":%s,\"used\":%s}", (n++?",":""), $6, $2, $3 }')"
+  DISKS="$(df -B1 -x tmpfs -x devtmpfs -x squashfs -x overlay -x efivarfs -x 9p -x drvfs 2>/dev/null | awk 'NR>1 && $6 !~ /^\/(boot|snap|init$|usr\/lib\/wsl|mnt\/wsl|etc\/pve$)/ && $6 !~ /\/subvol-[0-9]+-disk-/ { gsub(/"/,"",$6); printf "%s{\"name\":\"%s\",\"total\":%s,\"used\":%s}", (n++?",":""), $6, $2, $3 }')"
+  if [ -n "$PVE" ] && [ $((PVE_N++ % 15)) -eq 0 ]; then PVE_DISKS="$(pve_storage)"; fi
+  [ -n "$PVE_DISKS" ] && DISKS="$DISKS${DISKS:+,}$PVE_DISKS"
 
   GPUS=""
   if command -v nvidia-smi >/dev/null 2>&1; then

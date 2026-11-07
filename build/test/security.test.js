@@ -9,6 +9,7 @@ const net = require('node:net');
 const crypto = require('node:crypto');
 const dns = require('node:dns');
 const vm = require('node:vm');
+const zlib = require('node:zlib');
 const { Readable } = require('node:stream');
 const { startHub } = require('../../server');
 const { Access, validKey, localOperatorLink } = require('../../access');
@@ -458,6 +459,72 @@ test('shell report dispatch keeps credentials outside argv and report bytes on a
     assert.equal(piped.stdout.trim(),body);
   }
 });
+test('server package enrollment is HTTPS-only, single use and bound to the agent role',async t=>{
+  const {call,invite}=await fixture(t);
+  const enroll=(key,remote=true)=>call('/api/agent/enroll',{method:'POST',key,remote});
+  assert.equal((await enroll(await invite('desktop'))).status,403);
+  const code=await invite('agent');
+  assert.equal((await enroll(code,false)).status,403);
+  const reply=await enroll(code);
+  assert.equal(reply.status,200);
+  const [id,agent,...rest]=(await reply.text()).trimEnd().split('\n');
+  assert.ok(require('../../security').isValidId(id)); assert.ok(validKey(agent)); assert.equal(rest.length,0);
+  assert.equal((await enroll(code)).status,403);
+  assert.equal((await call('/api/report',{method:'POST',key:agent,body:{id,hostname:'prox'}})).status,200);
+  assert.equal((await call('/api/devices',{key:agent})).status,401);
+});
+
+test('the hub serves a well-formed agent package with executable scripts and LF endings',async t=>{
+  const {call}=await fixture(t);
+  const res=await call('/device-monitor-agent.deb');
+  assert.equal(res.status,200);
+  const deb=Buffer.from(await res.arrayBuffer());
+  assert.equal(deb.subarray(0,8).toString(),'!<arch>\n');
+  const members={};
+  for(let at=8;at<deb.length;){
+    const name=deb.toString('latin1',at,at+16).trim(),size=Number(deb.toString('latin1',at+48,at+58));
+    assert.equal(deb.toString('latin1',at+58,at+60),'`\n');
+    members[name]=deb.subarray(at+60,at+60+size); at+=60+size+size%2;
+  }
+  assert.deepEqual(Object.keys(members),['debian-binary','control.tar.gz','data.tar.gz']);
+  assert.equal(members['debian-binary'].toString(),'2.0\n');
+  function untar(gz){
+    const tar=zlib.gunzipSync(gz),files={};
+    for(let at=0;tar[at];){
+      const field=(from,to)=>tar.toString('latin1',at+from,at+to).replace(/\0.*$/s,'');
+      const size=parseInt(field(124,136),8),stored=tar.subarray(at,at+148).reduce((a,b)=>a+b,0)+32*8+tar.subarray(at+156,at+512).reduce((a,b)=>a+b,0);
+      assert.equal(parseInt(field(148,156),8),stored);
+      files[field(0,100)]={mode:parseInt(field(100,108),8),data:tar.subarray(at+512,at+512+size)};
+      at+=512+Math.ceil(size/512)*512;
+    }
+    return files;
+  }
+  const control=untar(members['control.tar.gz']),data=untar(members['data.tar.gz']);
+  assert.match(control['./control'].data.toString(),new RegExp('^Package: device-monitor-agent\\nVersion: '+require('../../package.json').version.replace(/\./g,'\\.')+'\\n','m'));
+  assert.ok(control['./control'].data.toString().endsWith('\n'));
+  for(const [name,mode] of [['./usr/lib/device-monitor/agent.sh',0o755],['./usr/sbin/device-monitor-enroll',0o755],['./usr/lib/systemd/system/device-monitor-agent.service',0o644]]){
+    assert.equal(data[name].mode,mode,name); assert.ok(!data[name].data.includes('\r'),name);
+  }
+  for(const name of ['./postinst','./prerm','./postrm']){
+    assert.equal(control[name].mode,0o755,name); assert.ok(!control[name].data.includes('\r'),name);
+  }
+});
+
+test('network totals skip virtual interfaces on a hypervisor and keep them in a container',t=>{
+  const cp=require('node:child_process');
+  const bash=process.platform==='win32'?path.join(process.env.ProgramFiles,'Git/bin/bash.exe'):'bash';
+  const dir=temp(t),posix=dir.replace(/\\/g,'/').replace(/^([A-Za-z]):/,(_,d)=>'/'+d.toLowerCase());
+  const source=fs.readFileSync(path.join(root,'agent','agent.sh'),'utf8').replace(/\r/g,'');
+  const fn=/read_net\(\) \{.*?\n\}\n/s.exec(source)[0].replaceAll('/sys/class/net',posix+'/net').replaceAll('/proc/net/dev',posix+'/dev');
+  const row=(n,rx,tx)=>`${n.padStart(6)}:${String(rx).padStart(8)}       1    0    0    0     0          0         0 ${String(tx).padStart(8)}       1    0    0    0     0       0          0\n`;
+  fs.writeFileSync(path.join(dir,'dev'),'Inter-|   Receive\n face |bytes\n'+row('lo',1,1)+row('nic0',100,200)+row('vmbr0',100,200)+row('veth100i0',50,60)+row('wlp3s0',7,9));
+  const read=()=>cp.spawnSync(bash,['-c',fn+'read_net'],{encoding:'utf8',windowsHide:true}).stdout.trim();
+  for(const n of ['nic0','vmbr0','veth100i0','wlp3s0']) fs.mkdirSync(path.join(dir,'net',n),{recursive:true});
+  assert.equal(read(),'257 469');
+  for(const n of ['nic0','wlp3s0']) fs.mkdirSync(path.join(dir,'net',n,'device'));
+  assert.equal(read(),'107 209');
+});
+
 test('case-distinct legacy files keep their own untagged rows on case-sensitive storage',t=>{
   const dir=temp(t),location=path.join(dir,'history');fs.mkdirSync(location);
   const minute=Math.floor(Date.now()/60000)*60000;

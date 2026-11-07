@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Connects this server to a hub. The hub's dashboard prints the full command under
+# + Add device -> Proxmox / Debian. The invitation arrives on stdin to keep it out of argv.
+set -eu
+DIR=/etc/device-monitor
+SERVICE=device-monitor-agent.service
+die() { echo "$1" >&2; exit 1; }
+
+[ "$(id -u)" = 0 ] || die 'Run this as root.'
+[ $# = 1 ] || die 'Usage: device-monitor-enroll https://hub.example:port < invitation'
+HUB="${1%/}"
+[[ $HUB =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] || die 'The hub address must be an HTTPS origin.'
+read -r CODE || true
+[[ ${CODE:-} =~ ^[A-Za-z0-9_-]{43}$ ]] || die 'Paste a new invitation from the hub.'
+
+RESPONSE="$(printf 'Authorization: Bearer %s\n' "$CODE" | curl -q --proto '=https' -fsS -m 20 -X POST -H @- "$HUB/api/agent/enroll")" \
+  || die 'The hub refused this invitation or could not be reached. Invitations work once, for ten minutes.'
+{ read -r DEVICE_ID; read -r TOKEN; } <<<"$RESPONSE"
+# This file is sourced by a root service, so only known-safe values may reach it.
+[[ ${DEVICE_ID:-} =~ ^[A-Za-z0-9._:-]{1,128}$ && ${TOKEN:-} =~ ^[A-Za-z0-9_-]{43}$ ]] || die 'The hub sent an invalid enrollment.'
+
+install -d -m 700 "$DIR"
+(umask 077; printf "HUB='%s'\nTOKEN='%s'\nDEVICE_ID='%s'\n" "$HUB" "$TOKEN" "$DEVICE_ID" > "$DIR/config.new")
+mv -f "$DIR/config.new" "$DIR/config"
+systemctl enable "$SERVICE" >/dev/null 2>&1
+systemctl restart "$SERVICE"
+echo "Device Monitor agent for $(hostname) -> $HUB. Remove it with: apt purge device-monitor-agent"
