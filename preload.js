@@ -20,6 +20,10 @@ contextBridge.exposeInMainWorld('deviceMonitorApp', {
   // Dashboard preferences kept by the app (read once, synchronously, before the page's script runs).
   prefs: (() => { try { return ipcRenderer.sendSync('dm:prefs-get'); } catch { return null; } })(),
   setPref: (k, v) => ipcRenderer.send('dm:pref-set', String(k), v == null ? null : String(v)),
+  // Desktop widget (the main process only answers its own widget window).
+  widgetResize: height => ipcRenderer.send('dm:widget-size', Number(height)),
+  openDashboard: () => ipcRenderer.send('dm:widget-open'),
+  hideWidget: () => ipcRenderer.send('dm:widget-hide'),
 });
 
 // Lets pages make room for the native window buttons and drag the window by its header.

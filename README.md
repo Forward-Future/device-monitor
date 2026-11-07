@@ -47,6 +47,23 @@ Expect it to be within about 20% of a plug-in power meter.
 |---|---|
 | ![24 hours of utilization and temperature history for one device](docs/screenshots/history.png) | ![Electricity use and cost per device over 7 days](docs/screenshots/advanced.png) |
 
+## Desktop widget
+
+<img src="docs/screenshots/widget-close-up.png" alt="Close-up of the desktop widget: a device card with CPU, GPU and memory gauges, temperatures and fan speeds, and the open and hide buttons above it" width="300" align="right">
+
+To keep an eye on your devices without opening the window, right-click the tray icon (the menu bar icon on a Mac) and tick **Desktop widget**.
+
+- One small card per device, with the dashboard's CPU, GPU and memory gauges, temperatures, power draw and fan speeds. It updates live.
+- It sits on the desktop rather than on top of your windows, and has no taskbar button.
+- Drag it anywhere. It remembers where you put it and comes back when the app starts, including at sign-in.
+- Hover over it to show its two buttons: open the dashboard, or hide the widget (turn it back on from the tray menu).
+- It uses °C or °F, as set in the dashboard.
+- It works in both Host and Connect mode, through the app's own connection to the hub, so there are no extra keys or setup.
+
+<br clear="right">
+
+![The desktop widget on a Windows desktop, showing four devices](docs/screenshots/widget.png)
+
 ## Pushing updates to all your devices
 
 On the PC that hosts the hub, from this folder:
@@ -160,6 +177,7 @@ npm run hub        # headless hub only (e.g. on a home server), dashboard at :77
 | `build/screenshots.js` | Regenerates the README screenshots in `docs/screenshots/` from a demo hub |
 | `build/test/` | Test fixtures: seeded test hub, macOS command mocks for the Mac agent |
 | `public/index.html` | Dashboard UI |
+| `public/widget.html` | Desktop widget (a frameless window turned on from the tray menu) |
 | `build/make-icon.js` | Generates the app and tray icons |
 
 App data is stored in `%APPDATA%\Device Monitor`: `settings.json`, plus `hub\` with the device list and access records. The installer isn't code-signed, so Windows SmartScreen may show "Windows protected your PC". Click **More info → Run anyway**.

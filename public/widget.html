@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Device Monitor widget</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --surface-2: #232321;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --border: rgba(255,255,255,0.10);
+    --cpu: #3987e5; --gpu: #d95926; --mem: #199e70;
+    --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+  }
+  * { box-sizing: border-box; }
+  /* The window is transparent; only the cards are drawn. The whole widget drags the window. */
+  html, body { margin: 0; background: transparent; overflow: hidden; }
+  body { color: var(--text-primary); font: 13px/1.35 "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, sans-serif;
+    user-select: none; -webkit-app-region: drag; }
+  button { -webkit-app-region: no-drag; font: inherit; color: inherit; cursor: pointer; }
+  #root { width: 300px; padding: 4px; display: flex; flex-direction: column; gap: 8px; }
+  #cards { display: flex; flex-direction: column; gap: 8px; }
+
+  .bar { display: flex; align-items: center; gap: 4px; padding: 0 4px; height: 22px; opacity: 0; transition: opacity .15s; }
+  body:hover .bar { opacity: 1; }
+  .bar span { flex: 1; font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-muted); }
+  .icon-btn { background: rgba(26,26,25,.85); border: 1px solid var(--border); color: var(--text-secondary); padding: 3px; border-radius: 6px; line-height: 0; }
+  .icon-btn:hover { color: var(--text-primary); background: var(--surface-2); }
+
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px 11px; display: flex; flex-direction: column; gap: 8px; }
+  .card.offline { opacity: 0.55; }
+  .card-head { display: flex; align-items: flex-start; gap: 8px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex: none; background: var(--good); box-shadow: 0 0 0 3px rgba(12,163,12,0.18); }
+  .offline .dot { background: var(--text-muted); box-shadow: none; }
+  .titles { flex: 1; min-width: 0; }
+  .name { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub { color: var(--text-muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .watts { color: var(--text-muted); font-size: 11px; margin-top: 2px; white-space: nowrap; }
+
+  .gauges { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .gauge { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; }
+  .gauge svg { width: 66px; }
+  .gauge .track { stroke: var(--grid); }
+  .gauge .val { font-size: 25px; font-weight: 600; fill: var(--text-primary); }
+  .gauge .lbl { font-size: 13px; letter-spacing: .08em; fill: var(--text-muted); text-transform: uppercase; }
+  .gauge-sub { font-size: 10.5px; color: var(--text-secondary); min-height: 19px; display: flex; align-items: center; max-width: 100%; white-space: nowrap; overflow: hidden; }
+  .gauge-sub .hint { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; }
+  .pill { display: inline-flex; align-items: center; gap: 5px; padding: 1px 7px; border-radius: 99px; background: var(--surface-2); font-size: 10.5px; color: var(--text-primary); white-space: nowrap; }
+  .pill i { width: 6px; height: 6px; border-radius: 50%; display: inline-block; flex: none; }
+  .pill small { color: var(--text-muted); font-size: 9.5px; }
+  .fans { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
+
+  .note { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; color: var(--text-secondary); font-size: 12px; }
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="bar">
+    <span>Device Monitor</span>
+    <button class="icon-btn" id="openBtn" title="Open dashboard" aria-label="Open dashboard">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+    </button>
+    <button class="icon-btn" id="hideBtn" title="Hide widget (turn it back on from the tray menu)" aria-label="Hide widget">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+    </button>
+  </div>
+  <div id="cards"><div class="note">Connecting…</div></div>
+</div>
+<script src="/session.js"></script>
+<script>
+const appApi = window.deviceMonitorApp;
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const devices = new Map();
+
+// ---------- formatting (same rules as the dashboard) ----------
+const unit = () => localStorage.getItem('unit') === 'F' ? 'F' : 'C';
+const fmtPct = v => v == null ? '–' : Math.round(v) + '%';
+const fmtTemp = c => c == null ? '–' : unit() === 'F' ? Math.round(c * 9 / 5 + 32) + '°F' : Math.round(c) + '°C';
+function fmtBytes(b, d = 1) {
+  if (b == null || isNaN(b)) return '–';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return b.toFixed(i < 2 ? 0 : d) + ' ' + u[i];
+}
+function memPair(used, total) {
+  const t = fmtBytes(total, 0), u = fmtBytes(used, used < 1024 ** 3 * 100 ? 1 : 0);
+  const [uv, uu] = u.split(' '), tu = t.split(' ')[1];
+  return uu === tu ? `${uv} / ${t}` : `${u} / ${t}`;
+}
+function ago(ms) {
+  const s = Math.round((Date.now() - ms) / 1000);
+  if (s < 60) return s + 's ago'; if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago'; return Math.round(s / 86400) + 'd ago';
+}
+function tempPill(c) {
+  if (c == null) return '<span class="hint">no sensor</span>';
+  const [color, label] = c < 70 ? ['var(--good)', ''] : c < 85 ? ['var(--warning)', 'Warm'] : ['var(--critical)', 'Hot'];
+  return `<span class="pill"><i style="background:${color}"></i>${fmtTemp(c)}${label ? ` <small>${label}</small>` : ''}</span>`;
+}
+const shortGpu = n => String(n || '').replace(/^(NVIDIA |AMD |Intel\(R\) |Intel )/, '').replace(/^GeForce /, '').replace(/ Laptop GPU$/, '');
+
+// ---------- gauge (the dashboard's 270° ring) ----------
+const R = 40, CIRC = 2 * Math.PI * R, LEN = CIRC * 0.75;
+function gauge(label, pct, color, sub) {
+  const v = pct == null ? 0 : Math.max(0, Math.min(100, pct));
+  return `<div class="gauge"><svg viewBox="0 0 100 98" role="img" aria-label="${label} ${fmtPct(pct)}">
+      <g transform="rotate(135 50 50)">
+        <circle class="track" cx="50" cy="50" r="${R}" fill="none" stroke-width="7" stroke-linecap="round" stroke-dasharray="${LEN} ${CIRC}"/>
+        ${pct == null ? '' : `<circle cx="50" cy="50" r="${R}" fill="none" stroke="${color}" stroke-width="7" stroke-linecap="round" stroke-dasharray="${Math.max(0.01, LEN * v / 100)} ${CIRC}"/>`}
+      </g>
+      <text class="val" x="50" y="54" text-anchor="middle">${fmtPct(pct)}</text>
+      <text class="lbl" x="50" y="95" text-anchor="middle">${label}</text>
+    </svg><div class="gauge-sub">${sub}</div></div>`;
+}
+
+// ---------- cards ----------
+function card(d) {
+  const L = d.latest || {}, on = d.online;
+  const cpu = L.cpu || {}, mem = L.memory || {}, gpus = L.gpus || [];
+  const g = gpus.find(x => x && x.usage != null) || gpus[0];
+  const off = '<span class="hint">offline</span>';
+  const watts = on && L.powerEst?.watts != null ? Math.round(L.powerEst.watts) + ' W' : '';
+  const status = on ? (d.os || d.platform || '') : 'offline · last seen ' + (d.lastSeen ? ago(d.lastSeen) : 'never');
+  const gpuSub = !g ? '<span class="hint">no GPU</span>' : !on ? off : g.temp != null ? tempPill(g.temp) : `<span class="hint">${esc(shortGpu(g.name))}</span>`;
+  const fans = on ? (L.fans || []).filter(f => f && f.rpm != null).slice(0, 4) : [];
+  return `<section class="card${on ? '' : ' offline'}">
+    <div class="card-head">
+      <span class="dot"></span>
+      <div class="titles"><div class="name" title="${esc(d.hostname)}">${esc(d.name || d.hostname || d.id)}</div><div class="sub">${esc(status)}</div></div>
+      <span class="watts">${watts}</span>
+    </div>
+    <div class="gauges">
+      ${gauge('CPU', on ? cpu.usage : null, 'var(--cpu)', on ? tempPill(cpu.temp) : off)}
+      ${gauge('GPU', g && on ? g.usage : null, 'var(--gpu)', gpuSub)}
+      ${gauge('Memory', on && mem.total ? mem.used / mem.total * 100 : null, 'var(--mem)', mem.total && on ? esc(memPair(mem.used, mem.total)) : '')}
+    </div>
+    ${fans.length ? `<div class="fans">${fans.map(f => `<span class="pill"><i style="background:${f.rpm > 0 ? 'var(--good)' : 'var(--text-muted)'}"></i>${esc(f.name)} <small>${Math.round(f.rpm).toLocaleString()} rpm</small></span>`).join('')}</div>` : ''}
+  </section>`;
+}
+
+let queued = false;
+function render() {
+  if (queued) return; queued = true;
+  requestAnimationFrame(() => {
+    queued = false;
+    const list = [...devices.values()].sort((a, b) => (a.order ?? 1e9) - (b.order ?? 1e9) || String(a.name || a.hostname).localeCompare(String(b.name || b.hostname)));
+    $('#cards').innerHTML = list.length ? list.map(card).join('') : '<div class="note">No devices yet. Add one from the dashboard.</div>';
+    fit();
+  });
+}
+// The window is sized to the cards (up to the screen height, which the app enforces).
+let lastHeight = 0;
+function fit() {
+  const h = Math.ceil($('#root').getBoundingClientRect().height);
+  if (h !== lastHeight) { lastHeight = h; appApi?.widgetResize?.(h); }
+}
+
+// ---------- live data ----------
+const es = new HubEvents();
+es.onmessage = ev => {
+  const m = JSON.parse(ev.data);
+  if (m.type === 'snapshot') { devices.clear(); for (const d of m.devices) devices.set(d.id, d); }
+  else if (m.type === 'report') devices.set(m.id, m.device);
+  else if (m.type === 'device') devices.set(m.device.id, m.device);
+  else if (m.type === 'removed') devices.delete(m.id);
+  else if (m.type === 'order') { for (const [id, o] of Object.entries(m.order)) { const d = devices.get(id); if (d) d.order = o; } }
+  else if (m.type === 'status') { for (const [id, on] of Object.entries(m.online)) { const d = devices.get(id); if (d) d.online = on; } }
+  else return;
+  render();
+};
+es.onerror = () => { if (!devices.size) { $('#cards').innerHTML = '<div class="note">Can’t reach the hub. Retrying…</div>'; fit(); } };
+setInterval(render, 30000);   // keeps "last seen" times fresh
+addEventListener('storage', e => { if (e.key === 'unit') render(); });
+
+$('#openBtn').addEventListener('click', () => appApi?.openDashboard?.());
+$('#hideBtn').addEventListener('click', () => appApi?.hideWidget?.());
+</script>
+</body>
+</html>

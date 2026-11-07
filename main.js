@@ -28,7 +28,7 @@ const TRAY_ICON = path.join(__dirname, 'build', IS_MAC ? 'trayTemplate.png' : 't
 // PowerShell can't read files inside app.asar, so the agent ships unpacked.
 const AGENT_DIR = path.join(__dirname, 'agent').replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
 
-let win = null, tray = null, hub = null, agent = null, updater = null, quitting = false;
+let win = null, widget = null, tray = null, hub = null, agent = null, updater = null, quitting = false;
 let clientTrust = null;
 const IS_WIN = process.platform === 'win32';
 // Public half of the release key (see build/release.js); without it, updates are disabled.
@@ -98,6 +98,10 @@ function dashboardProtocol() {
     if (u.host !== 'dashboard') return new Response(null, { status: 403 });
     if (request.method === 'GET' && u.pathname === '/') {
       const html = sec.htmlWithNonce(fs.readFileSync(path.join(__dirname, 'public','index.html'), 'utf8'));
+      return new Response(html.body, { headers: { ...sec.BASE_HEADERS, ...html.headers, 'Content-Type':'text/html; charset=utf-8' } });
+    }
+    if (request.method === 'GET' && u.pathname === '/widget') {
+      const html = sec.htmlWithNonce(fs.readFileSync(path.join(__dirname, 'public','widget.html'), 'utf8'));
       return new Response(html.body, { headers: { ...sec.BASE_HEADERS, ...html.headers, 'Content-Type':'text/html; charset=utf-8' } });
     }
     if (request.method === 'GET' && u.pathname === '/session.js') return new Response(fs.readFileSync(path.join(__dirname,'public','session.js')), { headers: { 'Content-Type':'text/javascript; charset=utf-8' } });
@@ -254,6 +258,85 @@ function loadMain() {
   return win.loadURL(DASHBOARD);
 }
 
+// ---- Desktop widget ----
+// A small frameless window with a live card per device. It sits on the desktop like a widget
+// (not always on top), is dragged anywhere, and is turned on or off from the tray menu.
+const WIDGET_URL = DASHBOARD + 'widget', WIDGET_WIDTH = 300;
+// Windows' Show desktop (Win+D) brings the desktop window to the front, and nothing can be raised above
+// it while it shows, so an ordinary window disappears along with the apps. A window owned by the desktop
+// window (Progman) comes forward with it instead. Electron has no API for a native owner, so one
+// PowerShell call sets it on the widget's handle, and also keeps the widget visible during Peek.
+function pinToDesktop(w) {
+  if (!IS_WIN) return;
+  const h = w.getNativeWindowHandle(), hwnd = (h.length >= 8 ? h.readBigUInt64LE() : h.readUInt32LE()).toString();
+  const ps = [
+    "Add-Type -Namespace DM -Name Win -MemberDefinition '" +
+      '[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, IntPtr title);' +
+      '[DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] public static extern IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value);' +
+      '[DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);' + "'",
+    // After an Explorer restart the desktop window takes a moment to come back.
+    "for ($i = 0; $i -lt 20 -and ($d = [DM.Win]::FindWindow('Progman', [IntPtr]::Zero)) -eq [IntPtr]::Zero; $i++) { Start-Sleep 1 }",
+    "if ($d -eq [IntPtr]::Zero) { exit 1 }",
+    `[void][DM.Win]::SetWindowLongPtr([IntPtr]${hwnd}, -8, $d)`,                       // GWLP_HWNDPARENT: the owner
+    `$on = 1; [void][DM.Win]::DwmSetWindowAttribute([IntPtr]${hwnd}, 12, [ref]$on, 4)`, // DWMWA_EXCLUDED_FROM_PEEK
+  ].join("\n");
+  execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')],
+    { windowsHide: true, timeout: 60e3 }, err => { if (err) console.error('widget: could not pin to the desktop', err.message); });
+}
+function createWidget() {
+  if (widget) return widget.showInactive();
+  let { x, y } = settings.widget || {};
+  const onScreen = Number.isFinite(x) && Number.isFinite(y) && screen.getAllDisplays().some(({ workArea: a }) =>
+    x >= a.x - 40 && x <= a.x + a.width - 80 && y >= a.y - 10 && y <= a.y + a.height - 60);
+  if (!onScreen) { const a = screen.getPrimaryDisplay().workArea; x = a.x + a.width - WIDGET_WIDTH - 16; y = a.y + 16; }
+  widget = new BrowserWindow({
+    x, y, width: WIDGET_WIDTH, height: 120, show: false, frame: false, transparent: true, backgroundColor: '#00000000',
+    resizable: false, minimizable: false, maximizable: false, fullscreenable: false, skipTaskbar: true, hasShadow: false,
+    // Clicking it never takes focus, so it can't pull its owner, the desktop, over your apps.
+    ...(IS_WIN ? { focusable: false } : {}),
+    title: 'Device Monitor widget', icon: ICON,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true, sandbox: true, nodeIntegration: false, webviewTag: false, spellcheck: false,
+    },
+  });
+  pinToDesktop(widget);
+  widget.once('ready-to-show', () => widget?.showInactive());
+  widget.on('moved', () => {
+    if (!widget) return;
+    const [wx, wy] = widget.getPosition();
+    settings.widget = { ...settings.widget, x: wx, y: wy }; saveSettingsSoon();
+  });
+  widget.on('closed', () => {
+    widget = null; buildTrayMenu();
+    // Closed while still turned on: Explorer restarted and took its desktop window, and the widget it owns,
+    // with it. Bring the widget back on the new desktop.
+    if (!quitting && settings.mode && settings.widget?.enabled) setTimeout(() => { if (!widget && !quitting && settings.mode && settings.widget?.enabled) createWidget(); }, 3000);
+  });
+  widget.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const stay = (e, url) => { if (url !== WIDGET_URL) e.preventDefault(); };
+  widget.webContents.on('will-navigate', stay);
+  widget.webContents.on('will-redirect', stay);
+  widget.loadURL(WIDGET_URL);
+}
+function closeWidget() { if (widget) { widget.destroy(); widget = null; } }
+function setWidget(on) {
+  settings.widget = { ...settings.widget, enabled: !!on }; saveSettings();
+  if (on && settings.mode) createWidget(); else closeWidget();
+  buildTrayMenu();
+}
+function isWidget(event) {
+  return !!widget && event.sender === widget.webContents && event.senderFrame === event.sender.mainFrame && event.senderFrame?.url === WIDGET_URL;
+}
+// The page reports the height of its cards; the window follows, up to the screen's height.
+ipcMain.on('dm:widget-size', (e, height) => {
+  if (!isWidget(e) || !Number.isFinite(height)) return;
+  const max = screen.getDisplayMatching(widget.getBounds()).workArea.height;
+  widget.setContentSize(WIDGET_WIDTH, Math.max(40, Math.min(Math.ceil(height), max)));
+});
+ipcMain.on('dm:widget-open', e => { if (isWidget(e)) showWindow(); });
+ipcMain.on('dm:widget-hide', e => { if (isWidget(e)) setWidget(false); });
+
 let pendingMaximize = false;
 function showWindow() {
   if (!win) return createWindow({ show: true });
@@ -289,6 +372,7 @@ function buildTrayMenu() {
   ];
   if (settings.mode) {
     items.push({ label: settings.mode === 'host' ? `Hosting dashboard · ${shareUrl()}` : `Connected to ${settings.hubUrl}`, enabled: false });
+    items.push({ label: 'Desktop widget', type: 'checkbox', checked: !!widget, click: m => setWidget(m.checked) });
     items.push({ label: 'Copy dashboard link', click: () => copyDashboardLink().catch(e => console.error(e.message)) });
     if (settings.mode === 'host' && inboundPort) items.push({ label: 'Allow access from other devices…', click: () => allowFirewall() });
     items.push({ label: 'Change setup…', click: () => { showWindow(); changeSetup(); } });
@@ -330,7 +414,7 @@ function handle(channel, fn, { localOnly = false } = {}) {
     return fn(event, ...args);
   });
 }
-async function changeSetup() { await stopServices(); settings.mode = null; delete settings.enrollment; delete settings.hubUrl; saveSettings(); buildTrayMenu(); loadMain(); }
+async function changeSetup() { closeWidget(); await stopServices(); settings.mode = null; delete settings.enrollment; delete settings.hubUrl; saveSettings(); buildTrayMenu(); loadMain(); }
 
 handle('dm:setup', async (_e, { mode, hubUrl } = {}) => {
   try {
@@ -351,6 +435,7 @@ handle('dm:setup', async (_e, { mode, hubUrl } = {}) => {
     }
     saveSettings();
     if (settings.startupConfigured !== true) { setStartup(true); settings.startupConfigured = true; saveSettings(); }
+    if (settings.widget?.enabled) createWidget();
     buildTrayMenu();
     setTimeout(loadMain, 300);
     return { ok: true };
@@ -453,7 +538,10 @@ if (!app.requestSingleInstanceLock()) {
     updater.start();
     const atLogin = process.argv.includes('--startup') || (IS_MAC && app.getLoginItemSettings().wasOpenedAtLogin);
     const hidden = process.argv.includes('--hidden') || (atLogin && settings.startMinimized === true);
-    createWindow({ show: !(hidden && settings.mode) });
+    // A hidden start runs only the hub, the agent and the widget; the dashboard window (and its renderer)
+    // is created the first time it's opened.
+    if (!hidden || !settings.mode) createWindow({ show: true });
+    if (settings.mode && settings.widget?.enabled) createWidget();
   });
   app.on('before-quit', () => {
     quitting = true; updater?.stop(); stopServices();
