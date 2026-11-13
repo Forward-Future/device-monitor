@@ -36,6 +36,10 @@ cpu_temp() {
       [ -f "$h/temp1_input" ] && { awk '{ printf "%.1f", $1/1000 }' "$h/temp1_input"; return; } ;;
     esac
   done
+  # Marvell Armada XP/370 SoC (e.g. Synology): the driver name sits on the device node and the value is whole degrees C.
+  for h in /sys/class/hwmon/hwmon*/device; do
+    [ "$(cat "$h/name" 2>/dev/null)" = axp-hwmon ] && [ -r "$h/temp1_input" ] && { awk '{ printf "%.1f", ($1 > 1000 ? $1/1000 : $1) }' "$h/temp1_input"; return; }
+  done
   # Fall back to the hottest CPU/ACPI thermal zone.
   local max=""
   for z in /sys/class/thermal/thermal_zone*; do
