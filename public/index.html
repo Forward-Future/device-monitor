@@ -163,6 +163,9 @@
   select { background: var(--surface-2); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font: inherit; }
   .tabs { display: flex; gap: 6px; margin: 14px 0 10px; }
   .dlg-foot { display: flex; justify-content: flex-end; margin-top: 18px; }
+  #renameDlg { width: min(380px, calc(100vw - 24px)); }
+  #renameDlg input { width: 100%; box-sizing: border-box; background: var(--surface-2); color: var(--text-primary); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font: inherit; }
+  #renameDlg .dlg-foot { gap: 8px; }
   .menu { position: absolute; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 4px; z-index: 10; min-width: 150px; box-shadow: 0 8px 30px rgba(0,0,0,.5); }
   .menu button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 7px 10px; border-radius: 6px; }
   .menu button:hover { background: #2c2c2a; }
@@ -333,6 +336,13 @@
 </section>
 
 
+<dialog id="renameDlg">
+  <form method="dialog">
+    <h3 id="renameTitle">Device name</h3>
+    <input id="renameInput" type="text" maxlength="60" autocomplete="off" aria-labelledby="renameTitle">
+    <div class="dlg-foot"><button type="button" class="btn" id="renameCancel">Cancel</button><button type="submit" class="btn primary" value="save">Save</button></div>
+  </form>
+</dialog>
 <dialog id="addDlg">
   <h3>Add a device</h3>
   <p>Pick how to add the device. Either way it shows up here within seconds and keeps reporting after restarts.</p>
@@ -853,6 +863,19 @@ function connect() {
 }
 
 // ---------- menu ----------
+// A text field in a dialog instead of window.prompt(), which Electron does not support.
+function askName(title, value) {
+  const dlg = $('#renameDlg'), input = $('#renameInput');
+  $('#renameTitle').textContent = title;
+  input.value = value || '';
+  return new Promise(resolve => {
+    dlg.addEventListener('close', () => resolve(dlg.returnValue === 'save' ? input.value.trim() : null), { once: true });
+    dlg.returnValue = '';
+    dlg.showModal();
+    input.select();
+  });
+}
+$('#renameCancel').addEventListener('click', () => $('#renameDlg').close('cancel'));
 function openMenu(e, id, anchor = e.currentTarget) {
   e.stopPropagation();
   document.querySelector('.menu')?.remove();
@@ -868,7 +891,7 @@ function openMenu(e, id, anchor = e.currentTarget) {
     const d = devices.get(id);
     if (a === 'history') location.hash = '#/history/' + encodeURIComponent(id);
     else if (a === 'rename') {
-      const name = prompt('Device name', d.name);
+      const name = await askName('Device name', d.name);
       if (name) await hubFetch('/api/devices/' + encodeURIComponent(id), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
     } else if (a === 'remove') {
       if (confirm(`Remove "${d.name}"? If its agent is still running it will re-appear. To stop it, run the uninstall command on that device.`))
