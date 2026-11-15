@@ -14,10 +14,16 @@ OS="$( . /etc/os-release 2>/dev/null; echo "${PRETTY_NAME:-Linux}")"
 CPU_NAME="$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//')"
 [ -z "$CPU_NAME" ] && CPU_NAME="$(lscpu 2>/dev/null | awk -F: '/^Model name/ { sub(/^ +/, "", $2); print $2; exit }')"  # ARM
 [ -z "$CPU_NAME" ] && CPU_NAME="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null)"
+# Old ARM kernels (e.g. Synology NAS): "Processor" / "Hardware" fields instead of "model name".
+# Raspberry Pi: only a "Model" field, and no /proc/device-tree/model inside containers.
+[ -z "$CPU_NAME" ] && CPU_NAME="$(sed -n 's/^Model[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | head -1)"
+[ -z "$CPU_NAME" ] && CPU_NAME="$(sed -n 's/^Processor[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | head -1)"
+HW_NAME="$(sed -n 's/^Hardware[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | head -1)"
+[ -n "$HW_NAME" ] && case "$CPU_NAME" in *"$HW_NAME"*) ;; *) CPU_NAME="$CPU_NAME ($HW_NAME)" ;; esac
 case "$CPU_NAME" in Neoverse-V2) CPU_NAME="NVIDIA Grace (Neoverse-V2)" ;; esac
 MODEL="$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null)"
 case "$MODEL" in ""|*"To be filled"*|"System Product Name") ;; *) OS="$OS · $MODEL" ;; esac
-THREADS="$(grep -c ^processor /proc/cpuinfo)"
+THREADS="$(grep -c ^processor /proc/cpuinfo)"; [ "${THREADS:-0}" -gt 0 ] || THREADS="$(nproc 2>/dev/null || echo 1)"
 case "$(cat /sys/class/dmi/id/chassis_type 2>/dev/null)" in 8|9|10|11|14|30|31|32) FORM=laptop ;; *) FORM=desktop ;; esac
 esc() { printf '%s' "$1" | tr -d '"\\' | tr -d '[:cntrl:]'; }  # strip chars that would break JSON
 num() { [[ "$1" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] && echo "$1" || echo null; }
@@ -31,6 +37,10 @@ cpu_temp() {
     case "$(cat "$h/name" 2>/dev/null)" in coretemp|k10temp|zenpower|cpu_thermal|soc_thermal)
       [ -f "$h/temp1_input" ] && { awk '{ printf "%.1f", $1/1000 }' "$h/temp1_input"; return; } ;;
     esac
+  done
+  # Marvell Armada XP/370 SoC (e.g. Synology): the driver name sits on the device node and the value is whole degrees C.
+  for h in /sys/class/hwmon/hwmon*/device; do
+    [ "$(cat "$h/name" 2>/dev/null)" = axp-hwmon ] && [ -r "$h/temp1_input" ] && { awk '{ printf "%.1f", ($1 > 1000 ? $1/1000 : $1) }' "$h/temp1_input"; return; }
   done
   # Fall back to the hottest CPU/ACPI thermal zone.
   local max=""
@@ -152,11 +162,14 @@ while true; do
   CUR_RAPL="$(read_rapl)"; CPU_W="$(cpu_power)"; PREV_RAPL="$CUR_RAPL"
   PREV_CPU="$CUR_CPU"; PREV_NET="$CUR_NET"; PREV_DISK="$CUR_DISK"; PREV_T="$T"
 
-  MEM="$(awk '/^MemTotal/ {t=$2} /^MemAvailable/ {a=$2} END { printf "\"total\":%.0f,\"used\":%.0f", t*1024, (t-a)*1024 }' /proc/meminfo)"
+  MEM="$(awk '/^MemTotal/ {t=$2} /^MemAvailable/ {a=$2} /^MemFree/ {f=$2} /^Buffers/ {b=$2} /^Cached/ {c=$2} END { if (a=="") a=f+b+c; printf "\"total\":%.0f,\"used\":%.0f", t*1024, (t-a)*1024 }' /proc/meminfo)"
   MHZ="$(awk -F: '/cpu MHz/ { s+=$2; n++ } END { if(n) printf "%.0f", s/n; else print "null" }' /proc/cpuinfo)"
   [ "$MHZ" = "null" ] && [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq ] && MHZ=$(( $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) / 1000 ))
   UPTIME="$(cut -d. -f1 /proc/uptime)"
   DISKS="$(df -B1 -x tmpfs -x devtmpfs -x squashfs -x overlay -x efivarfs -x 9p -x drvfs 2>/dev/null | awk 'NR>1 && $6 !~ /^\/(boot|snap|init$|usr\/lib\/wsl|mnt\/wsl)/ { gsub(/"/,"",$6); printf "%s{\"name\":\"%s\",\"total\":%s,\"used\":%s}", (n++?",":""), $6, $2, $3 }')"
+
+  # BusyBox df (Alpine, HA add-ons) has no -x/-B1: list each real block device once, in KiB.
+  [ -z "$DISKS" ] && DISKS="$(df -Pk 2>/dev/null | awk 'NR>1 && $1 ~ /^\/dev\/(sd|nvme|mmcblk|vd|md|dm-)/ && $6 !~ /^\/(boot|snap|etc|run|var|proc|sys)/ && !seen[$1]++ { gsub(/"/,"",$6); printf "%s{\"name\":\"%s\",\"total\":%.0f,\"used\":%.0f}", (n++?",":""), $6, $2*1024, $3*1024 }')"
 
   GPUS=""
   if command -v nvidia-smi >/dev/null 2>&1; then
