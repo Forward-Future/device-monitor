@@ -15,6 +15,8 @@ CPU_NAME="$(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2 | sed 's/^ *//')"
 [ -z "$CPU_NAME" ] && CPU_NAME="$(lscpu 2>/dev/null | awk -F: '/^Model name/ { sub(/^ +/, "", $2); print $2; exit }')"  # ARM
 [ -z "$CPU_NAME" ] && CPU_NAME="$(tr -d '\0' < /proc/device-tree/model 2>/dev/null)"
 # Old ARM kernels (e.g. Synology NAS): "Processor" / "Hardware" fields instead of "model name".
+# Raspberry Pi: only a "Model" field, and no /proc/device-tree/model inside containers.
+[ -z "$CPU_NAME" ] && CPU_NAME="$(sed -n 's/^Model[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | head -1)"
 [ -z "$CPU_NAME" ] && CPU_NAME="$(sed -n 's/^Processor[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | head -1)"
 HW_NAME="$(sed -n 's/^Hardware[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | head -1)"
 [ -n "$HW_NAME" ] && case "$CPU_NAME" in *"$HW_NAME"*) ;; *) CPU_NAME="$CPU_NAME ($HW_NAME)" ;; esac
@@ -165,6 +167,9 @@ while true; do
   [ "$MHZ" = "null" ] && [ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq ] && MHZ=$(( $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq) / 1000 ))
   UPTIME="$(cut -d. -f1 /proc/uptime)"
   DISKS="$(df -B1 -x tmpfs -x devtmpfs -x squashfs -x overlay -x efivarfs -x 9p -x drvfs 2>/dev/null | awk 'NR>1 && $6 !~ /^\/(boot|snap|init$|usr\/lib\/wsl|mnt\/wsl)/ { gsub(/"/,"",$6); printf "%s{\"name\":\"%s\",\"total\":%s,\"used\":%s}", (n++?",":""), $6, $2, $3 }')"
+
+  # BusyBox df (Alpine, HA add-ons) has no -x/-B1: list each real block device once, in KiB.
+  [ -z "$DISKS" ] && DISKS="$(df -Pk 2>/dev/null | awk 'NR>1 && $1 ~ /^\/dev\/(sd|nvme|mmcblk|vd|md|dm-)/ && $6 !~ /^\/(boot|snap|etc|run|var|proc|sys)/ && !seen[$1]++ { gsub(/"/,"",$6); printf "%s{\"name\":\"%s\",\"total\":%.0f,\"used\":%.0f}", (n++?",":""), $6, $2*1024, $3*1024 }')"
 
   GPUS=""
   if command -v nvidia-smi >/dev/null 2>&1; then
